@@ -287,7 +287,8 @@ def register_music_commands(bot):
                     return
                 stream_url = audio_formats[0]['url']
                 title = info.get('title', 'Unknown Title')
-                guild_queues[guild_id].append({'url': stream_url, 'title': title, 'ctx': ctx})
+                webpage_url = info.get('webpage_url', url)
+                guild_queues[guild_id].append({'url': stream_url, 'title': title, 'ctx': ctx, 'webpage_url': webpage_url})
                 print(f"[play] Added to queue: {title} (guild={guild_id})", flush=True)
                 await ctx.followup.send(f'Added to queue: {title}')
                 if not guild_playing[guild_id]:
