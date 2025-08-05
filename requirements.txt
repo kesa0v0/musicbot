@@ -1,3 +1,10 @@
-discord.py[voice]
 python-dotenv
+py-cord
+py-cord[voice]
+py-cord[speed]
+aiodns
+brotlipy
+cchardet
+msgspec
 yt-dlp
+pynacl
