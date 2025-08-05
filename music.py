@@ -40,6 +40,26 @@ def remove_from_queue(guild_id, position):
     return None
 
 def register_music_commands(bot):
+    # === 음악 명령어: 도움말 ===
+    @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Show all music commands and usage.")
+    async def help(ctx):
+        help_text = (
+            "**[음악봇 명령어 안내]**\n"
+            "/play <url> : 유튜브 곡을 큐에 추가 및 재생\n"
+            "/playlist <url> : 유튜브 플레이리스트 전체 추가\n"
+            "/repeat : 현재 곡 반복\n"
+            "/shuffle : 큐 셔플\n"
+            "/skip : 현재 곡 스킵\n"
+            "/pause : 곡 일시정지\n"
+            "/resume : 곡 재개\n"
+            "/queue : 큐 목록 보기\n"
+            "/remove <번호> : 큐에서 곡 제거\n"
+            "/clear : 큐 전체 비우기\n"
+            "/nowplaying : 현재 재생 곡 정보\n"
+            "/leave : 음성 채널에서 봇 퇴장\n"
+        )
+        await ctx.respond(help_text)
+
     # === 음악 명령어: 플레이리스트 추가 ===
     @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Play all videos in a YouTube playlist.")
     async def playlist(ctx, url: str):
