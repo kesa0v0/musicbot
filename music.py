@@ -1,16 +1,46 @@
+print('=== music.py started ===', flush=True)
+
 
 import discord
-print('=== music.py started ===', flush=True)
 import asyncio
 import yt_dlp as youtube_dl
 from collections import deque
+import random
+import functools
 
+
+current_song = {}   # {guild_id: {title, url}}
+main_loop = asyncio.get_event_loop()
 QUEUE_LIMIT = 30
 
 guild_queues = {}  # {guild_id: deque([...])}
 guild_playing = {} # {guild_id: bool}
 
+def get_guild_queue(guild_id):
+    """해당 길드의 큐를 반환하며, 없으면 초기화합니다."""
+    if guild_id not in guild_queues:
+        guild_queues[guild_id] = deque()
+        guild_playing[guild_id] = False
+    return guild_queues[guild_id]
+
+def is_queue_empty(guild_id):
+    return not guild_queues.get(guild_id)
+
+def clear_guild_queue(guild_id):
+    q = guild_queues.get(guild_id)
+    if q:
+        q.clear()
+
+def remove_from_queue(guild_id, position):
+    q = guild_queues.get(guild_id)
+    if q and 1 <= position <= len(q):
+        removed = q[position-1]['title']
+        del q[position-1]
+        return removed
+    return None
+
 def register_music_commands(bot):
+    # === 음악 명령어: 플레이리스트 추가 ===
     @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Play all videos in a YouTube playlist.")
     async def playlist(ctx, url: str):
         guild_id = ctx.guild.id
@@ -41,7 +71,7 @@ def register_music_commands(bot):
                 'quiet': False,
                 'noplaylist': False,
             }
-            import functools
+
             async def fetch_info():
                 loop = asyncio.get_event_loop()
                 print(f"[playlist] Starting yt-dlp extraction for url: {url}", flush=True)
@@ -68,8 +98,9 @@ def register_music_commands(bot):
                         continue
                     stream_url = audio_formats[0]['url']
                     title = entry.get('title', 'Unknown Title')
+                    webpage_url = entry.get('webpage_url', url)
                     if len(guild_queues[guild_id]) < QUEUE_LIMIT:
-                        guild_queues[guild_id].append({'url': stream_url, 'title': title, 'ctx': ctx})
+                        guild_queues[guild_id].append({'url': stream_url, 'title': title, 'ctx': ctx, 'webpage_url': webpage_url})
                         added_count += 1
                 print(f"[playlist] Added {added_count} videos to queue (guild={guild_id})", flush=True)
                 await ctx.followup.send(f'Added {added_count} videos to queue.')
@@ -87,29 +118,19 @@ def register_music_commands(bot):
         except Exception as e:
             print(f"[playlist] Unexpected error: {e}", flush=True)
             await ctx.followup.send(f'Unexpected error: {e}')
-    import random
 
+    # === 음악 명령어: 현재 곡 반복 ===
     @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Repeat the current song.")
     async def repeat(ctx):
         guild_id = ctx.guild.id
-        voice_client = ctx.voice_client
-        current = None
-        # 현재 곡 정보 가져오기
-        if hasattr(bot, 'play_next') and hasattr(bot.play_next, '__closure__'):
-            # current_song dict 접근
-            for cell in bot.play_next.__closure__:
-                if isinstance(cell.cell_contents, dict) and 'title' in cell.cell_contents.get(guild_id, {}):
-                    current = cell.cell_contents.get(guild_id)
-                    break
-        # fallback: nowplaying 명령어에서 사용하는 current_song dict
-        if not current:
-            current = globals().get('current_song', {}).get(guild_id)
-        if current:
-            guild_queues[guild_id].appendleft({'url': current['url'], 'title': current['title'], 'ctx': ctx})
-            await ctx.respond(f'Repeated: {current["title"]}')
+        song = current_song.get(guild_id)
+        if song:
+            guild_queues[guild_id].appendleft({'url': song['url'], 'title': song['title'], 'ctx': ctx})
+            await ctx.respond(f'Repeated: {song["title"]}')
         else:
             await ctx.respond('No song is currently playing.')
 
+    # === 음악 명령어: 큐 셔플 ===
     @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Shuffle the music queue.")
     async def shuffle(ctx):
         guild_id = ctx.guild.id
@@ -119,6 +140,8 @@ def register_music_commands(bot):
             return
         random.shuffle(q)
         await ctx.respond('Queue shuffled.')
+
+    # === 음악 명령어: 곡 스킵 ===
     @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Skip the current song.")
     async def skip(ctx):
         voice_client = ctx.voice_client
@@ -129,6 +152,8 @@ def register_music_commands(bot):
             await bot.play_next(ctx)
         else:
             await ctx.respond('Nothing is playing to skip.')
+
+    # === 음악 명령어: 곡 일시정지 ===
     @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Pause the current song.")
     async def pause(ctx):
         voice_client = ctx.voice_client
@@ -138,6 +163,7 @@ def register_music_commands(bot):
         else:
             await ctx.respond('Nothing is playing right now.')
 
+    # === 음악 명령어: 곡 재개 ===
     @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Resume the paused song.")
     async def resume(ctx):
         voice_client = ctx.voice_client
@@ -146,42 +172,39 @@ def register_music_commands(bot):
             await ctx.respond('Playback resumed.')
         else:
             await ctx.respond('Nothing is paused right now.')
+
+    # === 음악 명령어: 큐 보기 ===
     @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Show the current music queue.")
     async def queue(ctx):
         guild_id = ctx.guild.id
-        q = guild_queues.get(guild_id, deque())
+        q = get_guild_queue(guild_id)
         if not q:
             await ctx.respond('Queue is empty.')
         else:
             msg = '\n'.join([f'{i+1}. {item["title"]}' for i, item in enumerate(q)])
             await ctx.respond(f'Current queue:\n{msg}')
 
+    # === 음악 명령어: 큐에서 곡 제거 ===
     @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Remove a song from the queue by its position.")
     async def remove(ctx, position: int):
         guild_id = ctx.guild.id
-        q = guild_queues.get(guild_id, deque())
-        if not q:
-            await ctx.respond('Queue is empty.')
-            return
-        if position < 1 or position > len(q):
-            await ctx.respond('Invalid position.')
-            return
-        removed = q[position-1]['title']
-        del q[position-1]
-        await ctx.respond(f'Removed from queue: {removed}')
+        removed = remove_from_queue(guild_id, position)
+        if removed:
+            await ctx.respond(f'Removed from queue: {removed}')
+        else:
+            await ctx.respond('Queue is empty or invalid position.')
 
+    # === 음악 명령어: 큐 전체 비우기 ===
     @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Clear the entire music queue.")
     async def clear(ctx):
         guild_id = ctx.guild.id
-        q = guild_queues.get(guild_id, deque())
-        if not q:
+        if is_queue_empty(guild_id):
             await ctx.respond('Queue is already empty.')
         else:
-            q.clear()
+            clear_guild_queue(guild_id)
             await ctx.respond('Queue cleared.')
-    # 현재 재생 중인 곡 정보를 저장
-    current_song = {}
 
+    # === 음악 명령어: 현재 재생 중인 곡 정보 ===
     @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Show info about the currently playing song.")
     async def nowplaying(ctx):
         guild_id = ctx.guild.id
@@ -190,6 +213,8 @@ def register_music_commands(bot):
             await ctx.respond(f'Now playing: {song["title"]}\nURL: {song["url"]}')
         else:
             await ctx.respond('No song is currently playing.')
+
+    # === 음악 명령어: 음성 채널에서 봇 퇴장 ===
     @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Disconnect the bot from the voice channel.")
     async def leave(ctx):
         voice_client = ctx.voice_client
@@ -204,6 +229,7 @@ def register_music_commands(bot):
         else:
             await ctx.respond("Bot is not connected to any voice channel.")
 
+    # === 음악 명령어: 유튜브 단일 곡 재생 ===
     @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Play a song from YouTube.")
     async def play(ctx, url: str):
         guild_id = ctx.guild.id
@@ -239,7 +265,7 @@ def register_music_commands(bot):
                 'quiet': False,
                 'noplaylist': True,
             }
-            import functools
+            # ...existing code...
             async def fetch_info():
                 loop = asyncio.get_event_loop()
                 print(f"[play] Starting yt-dlp extraction for url: {url}", flush=True)
@@ -291,7 +317,9 @@ def register_music_commands(bot):
                 voice_client = ctx.voice_client
                 guild_playing[guild_id] = True
                 # 현재 곡 정보 저장
-                current_song[guild_id] = {'title': next_song['title'], 'url': next_song['url']}
+                # next_song에 'webpage_url'이 있으면 원본 링크로 저장
+                display_url = next_song.get('webpage_url', next_song['url'])
+                current_song[guild_id] = {'title': next_song['title'], 'url': display_url}
                 print(f"[play_next] Now playing: {next_song['title']} (guild={guild_id})", flush=True)
                 def after_playing(error):
                     print(f"[play_next] Song finished: {next_song['title']} (guild={guild_id}), error={error}", flush=True)
@@ -301,7 +329,7 @@ def register_music_commands(bot):
                     print(f"[play_next] Starting FFmpegPCMAudio for url: {next_song['url']}", flush=True)
                     source = discord.FFmpegPCMAudio(
                         next_song['url'],
-                        before_options='-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+                        before_options='-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -probesize 32M',
                         options='-vn'
                     )
                     voice_client.play(source, after=after_playing)
@@ -312,8 +340,8 @@ def register_music_commands(bot):
                     guild_playing[guild_id] = False
                     current_song[guild_id] = None
                     return
-                # 곡 정보와 URL을 함께 출력
-                coro = next_song['ctx'].respond(f'Now playing: {next_song["title"]}\nURL: {next_song["url"]}')
+                # 곡 정보와 원본 유튜브 링크를 함께 출력
+                coro = next_song['ctx'].respond(f'Now playing: {next_song["title"]}\nURL: {display_url}')
                 asyncio.run_coroutine_threadsafe(coro, main_loop)
             else:
                 print(f"[play_next] Queue empty for guild {guild_id}", flush=True)
@@ -335,4 +363,6 @@ def register_music_events(bot):
                 if guild_id in guild_playing:
                     guild_playing[guild_id] = False
                 if guild_id in guild_queues:
-                    guild_queues[guild_id].clear()
+                    for entry in guild_queues[guild_id]:
+                        webpage_url = entry.get('webpage_url', entry['url'])
+                guild_queues[guild_id].clear()
