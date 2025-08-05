@@ -15,4 +15,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # 봇을 실행하는 기본 명령어를 설정합니다.
-CMD ["python", "bot.py"]
+CMD ["python", "main.py"]

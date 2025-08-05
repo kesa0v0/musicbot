@@ -9,6 +9,31 @@ guild_queues = {}  # {guild_id: deque([...])}
 guild_playing = {} # {guild_id: bool}
 
 def register_music_commands(bot):
+    # 현재 재생 중인 곡 정보를 저장
+    current_song = {}
+
+    @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Show info about the currently playing song.")
+    async def nowplaying(ctx):
+        guild_id = ctx.guild.id
+        song = current_song.get(guild_id)
+        if song:
+            await ctx.respond(f'Now playing: {song["title"]}\nURL: {song["url"]}')
+        else:
+            await ctx.respond('No song is currently playing.')
+    @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Disconnect the bot from the voice channel.")
+    async def leave(ctx):
+        voice_client = ctx.voice_client
+        if voice_client:
+            await voice_client.disconnect()
+            guild_id = ctx.guild.id
+            if guild_id in guild_playing:
+                guild_playing[guild_id] = False
+            if guild_id in guild_queues:
+                guild_queues[guild_id].clear()
+            await ctx.respond("Bot has left the voice channel and cleared the queue.")
+        else:
+            await ctx.respond("Bot is not connected to any voice channel.")
+
     @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Play a song from YouTube.")
     async def play(ctx, url: str):
         guild_id = ctx.guild.id
@@ -50,15 +75,19 @@ def register_music_commands(bot):
             next_song = guild_queues[guild_id].popleft()
             voice_client = ctx.voice_client
             guild_playing[guild_id] = True
+            # 현재 곡 정보 저장
+            current_song[guild_id] = {'title': next_song['title'], 'url': next_song['url']}
             def after_playing(error):
                 coro = play_next(next_song['ctx'])
                 fut = discord.utils.get_event_loop().create_task(coro)
             source = discord.FFmpegPCMAudio(next_song['url'])
             voice_client.play(source, after=after_playing)
-            coro = next_song['ctx'].respond(f'Now playing: {next_song['title']}')
+            # 곡 정보와 URL을 함께 출력
+            coro = next_song['ctx'].respond(f'Now playing: {next_song["title"]}\nURL: {next_song["url"]}')
             fut = discord.utils.get_event_loop().create_task(coro)
         else:
             guild_playing[guild_id] = False
+            current_song[guild_id] = None
     # play_next를 외부에서 쓸 수 있게 등록
     bot.play_next = play_next
 
