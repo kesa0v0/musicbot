@@ -151,7 +151,7 @@ def register_music_commands(bot):
                     await ctx.followup.send("You need to be in a voice channel to play music.")
                     return
             ydl_opts = {
-                'format': 'bestaudio/best',
+                'format': 'bestaudio',
                 'postprocessors': [{
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': 'mp3',
@@ -162,7 +162,12 @@ def register_music_commands(bot):
             try:
                 with youtube_dl.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
-                    stream_url = info['formats'][0]['url']
+                    # 오디오가 있는 format만 선택
+                    audio_formats = [f for f in info['formats'] if f.get('acodec') != 'none' and f.get('url')]
+                    if not audio_formats:
+                        await ctx.followup.send('No audio stream found for this video.')
+                        return
+                    stream_url = audio_formats[0]['url']
                     title = info.get('title', 'Unknown Title')
             except Exception as e:
                 await ctx.followup.send(f'Failed to fetch audio: {e}')
