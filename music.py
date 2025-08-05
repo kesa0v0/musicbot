@@ -9,6 +9,23 @@ guild_queues = {}  # {guild_id: deque([...])}
 guild_playing = {} # {guild_id: bool}
 
 def register_music_commands(bot):
+    @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Pause the current song.")
+    async def pause(ctx):
+        voice_client = ctx.voice_client
+        if voice_client and voice_client.is_playing():
+            voice_client.pause()
+            await ctx.respond('Playback paused.')
+        else:
+            await ctx.respond('Nothing is playing right now.')
+
+    @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Resume the paused song.")
+    async def resume(ctx):
+        voice_client = ctx.voice_client
+        if voice_client and voice_client.is_paused():
+            voice_client.resume()
+            await ctx.respond('Playback resumed.')
+        else:
+            await ctx.respond('Nothing is paused right now.')
     @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Show the current music queue.")
     async def queue(ctx):
         guild_id = ctx.guild.id
