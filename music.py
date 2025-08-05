@@ -129,59 +129,77 @@ def register_music_commands(bot):
     @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Play a song from YouTube.")
     async def play(ctx, url: str):
         guild_id = ctx.guild.id
-        if guild_id not in guild_queues:
-            guild_queues[guild_id] = deque()
-            guild_playing[guild_id] = False
-        # queue 길이 제한 체크
-        if len(guild_queues[guild_id]) >= QUEUE_LIMIT:
-            await ctx.respond(f'Queue is full! (최대 {QUEUE_LIMIT}곡까지 가능)')
-            return
-        if not ctx.voice_client:
-            if ctx.author.voice:
-                channel = ctx.author.voice.channel
-                await channel.connect()
-            else:
-                await ctx.respond("You need to be in a voice channel to play music.")
+        try:
+            if guild_id not in guild_queues:
+                guild_queues[guild_id] = deque()
+                guild_playing[guild_id] = False
+            # queue 길이 제한 체크
+            if len(guild_queues[guild_id]) >= QUEUE_LIMIT:
+                await ctx.respond(f'Queue is full! (최대 {QUEUE_LIMIT}곡까지 가능)')
                 return
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            'quiet': True,
-        }
-        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            stream_url = info['formats'][0]['url']
-            title = info.get('title', 'Unknown Title')
-        guild_queues[guild_id].append({'url': stream_url, 'title': title, 'ctx': ctx})
-        await ctx.respond(f'Added to queue: {title}')
-        if not guild_playing[guild_id]:
-            await play_next(ctx)
+            if not ctx.voice_client:
+                if ctx.author.voice:
+                    channel = ctx.author.voice.channel
+                    try:
+                        await channel.connect()
+                    except Exception as e:
+                        await ctx.respond(f'Failed to connect to voice channel: {e}')
+                        return
+                else:
+                    await ctx.respond("You need to be in a voice channel to play music.")
+                    return
+            ydl_opts = {
+                'format': 'bestaudio/best',
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }],
+                'quiet': True,
+            }
+            try:
+                with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    stream_url = info['formats'][0]['url']
+                    title = info.get('title', 'Unknown Title')
+            except Exception as e:
+                await ctx.respond(f'Failed to fetch audio: {e}')
+                return
+            guild_queues[guild_id].append({'url': stream_url, 'title': title, 'ctx': ctx})
+            await ctx.respond(f'Added to queue: {title}')
+            if not guild_playing[guild_id]:
+                await play_next(ctx)
+        except Exception as e:
+            await ctx.respond(f'Unexpected error: {e}')
 
     async def play_next(ctx):
         guild_id = ctx.guild.id
-        if guild_queues[guild_id]:
-            next_song = guild_queues[guild_id].popleft()
-            voice_client = ctx.voice_client
-            guild_playing[guild_id] = True
-            # 현재 곡 정보 저장
-            current_song[guild_id] = {'title': next_song['title'], 'url': next_song['url']}
-            def after_playing(error):
-                coro = play_next(next_song['ctx'])
+        try:
+            if guild_queues[guild_id]:
+                next_song = guild_queues[guild_id].popleft()
+                voice_client = ctx.voice_client
+                guild_playing[guild_id] = True
+                # 현재 곡 정보 저장
+                current_song[guild_id] = {'title': next_song['title'], 'url': next_song['url']}
+                def after_playing(error):
+                    coro = play_next(next_song['ctx'])
+                    fut = discord.utils.get_event_loop().create_task(coro)
+                try:
+                    source = discord.FFmpegPCMAudio(next_song['url'])
+                    voice_client.play(source, after=after_playing)
+                except Exception as e:
+                    await next_song['ctx'].respond(f'Failed to play audio: {e}')
+                    guild_playing[guild_id] = False
+                    current_song[guild_id] = None
+                    return
+                # 곡 정보와 URL을 함께 출력
+                coro = next_song['ctx'].respond(f'Now playing: {next_song["title"]}\nURL: {next_song["url"]}')
                 fut = discord.utils.get_event_loop().create_task(coro)
-            source = discord.FFmpegPCMAudio(next_song['url'])
-            voice_client.play(source, after=after_playing)
-            # 곡 정보와 URL을 함께 출력
-            coro = next_song['ctx'].respond(f'Now playing: {next_song["title"]}\nURL: {next_song["url"]}')
-            fut = discord.utils.get_event_loop().create_task(coro)
-        else:
-            guild_playing[guild_id] = False
-            current_song[guild_id] = None
-    # play_next를 외부에서 쓸 수 있게 등록
-    bot.play_next = play_next
+            else:
+                guild_playing[guild_id] = False
+                current_song[guild_id] = None
+        except Exception as e:
+            await ctx.respond(f'Unexpected error: {e}')
 
 def register_music_events(bot):
     @bot.event
