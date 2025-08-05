@@ -154,24 +154,31 @@ def register_music_commands(bot):
                 'format': 'bestaudio',
                 'quiet': True,
             }
-            try:
+            import functools
+            async def fetch_info():
+                loop = asyncio.get_event_loop()
                 with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(url, download=False)
-                    # 오디오가 있는 format 중 bitrate가 높은 것 우선 선택
-                    audio_formats = sorted(
-                        [f for f in info['formats'] if f.get('acodec') != 'none' and f.get('url')],
-                        key=lambda x: 0 if x.get('abr') is None else x.get('abr'),
-                        reverse=True
-                    )
-                    if not audio_formats:
-                        await ctx.followup.send('No audio stream found for this video.')
-                        return
-                    stream_url = audio_formats[0]['url']
-                    title = info.get('title', 'Unknown Title')
+                    info = await loop.run_in_executor(None, functools.partial(ydl.extract_info, url, False))
+                return info
+            try:
+                info = await asyncio.wait_for(fetch_info(), timeout=15)
+                audio_formats = sorted(
+                    [f for f in info['formats'] if f.get('acodec') != 'none' and f.get('url')],
+                    key=lambda x: 0 if x.get('abr') is None else x.get('abr'),
+                    reverse=True
+                )
+                if not audio_formats:
+                    await ctx.followup.send('No audio stream found for this video.')
+                    return
+                stream_url = audio_formats[0]['url']
+                title = info.get('title', 'Unknown Title')
                 guild_queues[guild_id].append({'url': stream_url, 'title': title, 'ctx': ctx})
                 await ctx.followup.send(f'Added to queue: {title}')
                 if not guild_playing[guild_id]:
                     await play_next(ctx)
+            except asyncio.TimeoutError:
+                await ctx.followup.send('Timeout: 유튜브 정보 추출이 15초 내에 완료되지 않았습니다.')
+                return
             except Exception as e:
                 await ctx.followup.send(f'Failed to fetch audio: {e}')
                 return
