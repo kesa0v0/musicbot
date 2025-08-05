@@ -157,8 +157,12 @@ def register_music_commands(bot):
             try:
                 with youtube_dl.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
-                    # 오디오가 있는 format만 선택
-                    audio_formats = [f for f in info['formats'] if f.get('acodec') != 'none' and f.get('url')]
+                    # 오디오가 있는 format 중 bitrate가 높은 것 우선 선택
+                    audio_formats = sorted(
+                        [f for f in info['formats'] if f.get('acodec') != 'none' and f.get('url')],
+                        key=lambda x: x.get('abr', 0),
+                        reverse=True
+                    )
                     if not audio_formats:
                         await ctx.followup.send('No audio stream found for this video.')
                         return
@@ -192,7 +196,8 @@ def register_music_commands(bot):
                 try:
                     source = discord.FFmpegPCMAudio(
                         next_song['url'],
-                        before_options='-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5'
+                        before_options='-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+                        options='-vn'
                     )
                     voice_client.play(source, after=after_playing)
                 except Exception as e:
