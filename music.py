@@ -5,12 +5,88 @@ import asyncio
 import yt_dlp as youtube_dl
 from collections import deque
 
-QUEUE_LIMIT = 10
+QUEUE_LIMIT = 30
 
 guild_queues = {}  # {guild_id: deque([...])}
 guild_playing = {} # {guild_id: bool}
 
 def register_music_commands(bot):
+    @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Play all videos in a YouTube playlist.")
+    async def playlist(ctx, url: str):
+        guild_id = ctx.guild.id
+        await ctx.defer()
+        try:
+            print(f"[playlist] Command received: guild={guild_id}, url={url}", flush=True)
+            if guild_id not in guild_queues:
+                guild_queues[guild_id] = deque()
+                guild_playing[guild_id] = False
+                print(f"[playlist] Initialized queue and playing state for guild {guild_id}", flush=True)
+            if not ctx.voice_client:
+                if ctx.author.voice:
+                    channel = ctx.author.voice.channel
+                    try:
+                        print(f"[playlist] Connecting to voice channel: {channel}", flush=True)
+                        await channel.connect()
+                        print(f"[playlist] Connected to voice channel: {channel}", flush=True)
+                    except Exception as e:
+                        print(f"[playlist] Failed to connect to voice channel: {e}", flush=True)
+                        await ctx.followup.send(f'Failed to connect to voice channel: {e}')
+                        return
+                else:
+                    print(f"[playlist] Author not in voice channel", flush=True)
+                    await ctx.followup.send("You need to be in a voice channel to play music.")
+                    return
+            ydl_opts = {
+                'format': 'bestaudio',
+                'quiet': False,
+                'noplaylist': False,
+            }
+            import functools
+            async def fetch_info():
+                loop = asyncio.get_event_loop()
+                print(f"[playlist] Starting yt-dlp extraction for url: {url}", flush=True)
+                with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+                    info = await loop.run_in_executor(None, functools.partial(ydl.extract_info, url, False))
+                print(f"[playlist] yt-dlp extraction finished for url: {url}", flush=True)
+                return info
+            try:
+                info = await asyncio.wait_for(fetch_info(), timeout=30)
+                print(f"[playlist] yt-dlp info received", flush=True)
+                entries = info.get('entries')
+                if not entries:
+                    print(f"[playlist] No playlist entries found for url: {url}", flush=True)
+                    await ctx.followup.send('No playlist found for this URL.')
+                    return
+                added_count = 0
+                for entry in entries:
+                    audio_formats = sorted(
+                        [f for f in entry['formats'] if f.get('acodec') != 'none' and f.get('url')],
+                        key=lambda x: 0 if x.get('abr') is None else x.get('abr'),
+                        reverse=True
+                    )
+                    if not audio_formats:
+                        continue
+                    stream_url = audio_formats[0]['url']
+                    title = entry.get('title', 'Unknown Title')
+                    if len(guild_queues[guild_id]) < QUEUE_LIMIT:
+                        guild_queues[guild_id].append({'url': stream_url, 'title': title, 'ctx': ctx})
+                        added_count += 1
+                print(f"[playlist] Added {added_count} videos to queue (guild={guild_id})", flush=True)
+                await ctx.followup.send(f'Added {added_count} videos to queue.')
+                if not guild_playing[guild_id] and added_count > 0:
+                    print(f"[playlist] Starting playback for guild {guild_id}", flush=True)
+                    await play_next(ctx)
+            except asyncio.TimeoutError:
+                print(f"[playlist] Timeout during yt-dlp extraction for url: {url}", flush=True)
+                await ctx.followup.send('Timeout: 유튜브 플레이리스트 정보 추출이 30초 내에 완료되지 않았습니다.')
+                return
+            except Exception as e:
+                print(f"[playlist] Exception during yt-dlp extraction: {e}", flush=True)
+                await ctx.followup.send(f'Failed to fetch playlist: {e}')
+                return
+        except Exception as e:
+            print(f"[playlist] Unexpected error: {e}", flush=True)
+            await ctx.followup.send(f'Unexpected error: {e}')
     import random
 
     @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Repeat the current song.")
@@ -161,6 +237,7 @@ def register_music_commands(bot):
             ydl_opts = {
                 'format': 'bestaudio',
                 'quiet': False,
+                'noplaylist': True,
             }
             import functools
             async def fetch_info():
