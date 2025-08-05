@@ -132,22 +132,29 @@ def register_music_commands(bot):
         guild_id = ctx.guild.id
         await ctx.defer()
         try:
+            print(f"[play] Command received: guild={guild_id}, url={url}")
             if guild_id not in guild_queues:
                 guild_queues[guild_id] = deque()
                 guild_playing[guild_id] = False
+                print(f"[play] Initialized queue and playing state for guild {guild_id}")
             # queue 길이 제한 체크
             if len(guild_queues[guild_id]) >= QUEUE_LIMIT:
+                print(f"[play] Queue full for guild {guild_id}")
                 await ctx.followup.send(f'Queue is full! (최대 {QUEUE_LIMIT}곡까지 가능)')
                 return
             if not ctx.voice_client:
                 if ctx.author.voice:
                     channel = ctx.author.voice.channel
                     try:
+                        print(f"[play] Connecting to voice channel: {channel}")
                         await channel.connect()
+                        print(f"[play] Connected to voice channel: {channel}")
                     except Exception as e:
+                        print(f"[play] Failed to connect to voice channel: {e}")
                         await ctx.followup.send(f'Failed to connect to voice channel: {e}')
                         return
                 else:
+                    print(f"[play] Author not in voice channel")
                     await ctx.followup.send("You need to be in a voice channel to play music.")
                     return
             ydl_opts = {
@@ -157,32 +164,41 @@ def register_music_commands(bot):
             import functools
             async def fetch_info():
                 loop = asyncio.get_event_loop()
+                print(f"[play] Starting yt-dlp extraction for url: {url}")
                 with youtube_dl.YoutubeDL(ydl_opts) as ydl:
                     info = await loop.run_in_executor(None, functools.partial(ydl.extract_info, url, False))
+                print(f"[play] yt-dlp extraction finished for url: {url}")
                 return info
             try:
                 info = await asyncio.wait_for(fetch_info(), timeout=15)
+                print(f"[play] yt-dlp info received: title={info.get('title', 'Unknown')}")
                 audio_formats = sorted(
                     [f for f in info['formats'] if f.get('acodec') != 'none' and f.get('url')],
                     key=lambda x: 0 if x.get('abr') is None else x.get('abr'),
                     reverse=True
                 )
                 if not audio_formats:
+                    print(f"[play] No audio stream found for url: {url}")
                     await ctx.followup.send('No audio stream found for this video.')
                     return
                 stream_url = audio_formats[0]['url']
                 title = info.get('title', 'Unknown Title')
                 guild_queues[guild_id].append({'url': stream_url, 'title': title, 'ctx': ctx})
+                print(f"[play] Added to queue: {title} (guild={guild_id})")
                 await ctx.followup.send(f'Added to queue: {title}')
                 if not guild_playing[guild_id]:
+                    print(f"[play] Starting playback for guild {guild_id}")
                     await play_next(ctx)
             except asyncio.TimeoutError:
+                print(f"[play] Timeout during yt-dlp extraction for url: {url}")
                 await ctx.followup.send('Timeout: 유튜브 정보 추출이 15초 내에 완료되지 않았습니다.')
                 return
             except Exception as e:
+                print(f"[play] Exception during yt-dlp extraction: {e}")
                 await ctx.followup.send(f'Failed to fetch audio: {e}')
                 return
         except Exception as e:
+            print(f"[play] Unexpected error: {e}")
             await ctx.followup.send(f'Unexpected error: {e}')
 
     # 메인 이벤트 루프를 전역 변수로 저장
@@ -191,23 +207,29 @@ def register_music_commands(bot):
     async def play_next(ctx):
         guild_id = ctx.guild.id
         try:
+            print(f"[play_next] Called for guild {guild_id}")
             if guild_queues[guild_id]:
                 next_song = guild_queues[guild_id].popleft()
                 voice_client = ctx.voice_client
                 guild_playing[guild_id] = True
                 # 현재 곡 정보 저장
                 current_song[guild_id] = {'title': next_song['title'], 'url': next_song['url']}
+                print(f"[play_next] Now playing: {next_song['title']} (guild={guild_id})")
                 def after_playing(error):
+                    print(f"[play_next] Song finished: {next_song['title']} (guild={guild_id}), error={error}")
                     coro = play_next(next_song['ctx'])
                     asyncio.run_coroutine_threadsafe(coro, main_loop)
                 try:
+                    print(f"[play_next] Starting FFmpegPCMAudio for url: {next_song['url']}")
                     source = discord.FFmpegPCMAudio(
                         next_song['url'],
                         before_options='-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
                         options='-vn'
                     )
                     voice_client.play(source, after=after_playing)
+                    print(f"[play_next] Playback started for: {next_song['title']} (guild={guild_id})")
                 except Exception as e:
+                    print(f"[play_next] Failed to play audio: {e}")
                     await next_song['ctx'].respond(f'Failed to play audio: {e}')
                     guild_playing[guild_id] = False
                     current_song[guild_id] = None
@@ -216,9 +238,11 @@ def register_music_commands(bot):
                 coro = next_song['ctx'].respond(f'Now playing: {next_song["title"]}\nURL: {next_song["url"]}')
                 asyncio.run_coroutine_threadsafe(coro, main_loop)
             else:
+                print(f"[play_next] Queue empty for guild {guild_id}")
                 guild_playing[guild_id] = False
                 current_song[guild_id] = None
         except Exception as e:
+            print(f"[play_next] Unexpected error: {e}")
             await ctx.respond(f'Unexpected error: {e}')
 
 def register_music_events(bot):
