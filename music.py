@@ -152,11 +152,6 @@ def register_music_commands(bot):
                     return
             ydl_opts = {
                 'format': 'bestaudio',
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
-                }],
                 'quiet': True,
             }
             try:
@@ -195,7 +190,10 @@ def register_music_commands(bot):
                     coro = play_next(next_song['ctx'])
                     asyncio.run_coroutine_threadsafe(coro, main_loop)
                 try:
-                    source = discord.FFmpegPCMAudio(next_song['url'])
+                    source = discord.FFmpegPCMAudio(
+                        next_song['url'],
+                        before_options='-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5'
+                    )
                     voice_client.play(source, after=after_playing)
                 except Exception as e:
                     await next_song['ctx'].respond(f'Failed to play audio: {e}')
