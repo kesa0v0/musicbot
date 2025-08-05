@@ -9,6 +9,39 @@ guild_queues = {}  # {guild_id: deque([...])}
 guild_playing = {} # {guild_id: bool}
 
 def register_music_commands(bot):
+    @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Show the current music queue.")
+    async def queue(ctx):
+        guild_id = ctx.guild.id
+        q = guild_queues.get(guild_id, deque())
+        if not q:
+            await ctx.respond('Queue is empty.')
+        else:
+            msg = '\n'.join([f'{i+1}. {item["title"]}' for i, item in enumerate(q)])
+            await ctx.respond(f'Current queue:\n{msg}')
+
+    @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Remove a song from the queue by its position.")
+    async def remove(ctx, position: int):
+        guild_id = ctx.guild.id
+        q = guild_queues.get(guild_id, deque())
+        if not q:
+            await ctx.respond('Queue is empty.')
+            return
+        if position < 1 or position > len(q):
+            await ctx.respond('Invalid position.')
+            return
+        removed = q[position-1]['title']
+        del q[position-1]
+        await ctx.respond(f'Removed from queue: {removed}')
+
+    @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Clear the entire music queue.")
+    async def clear(ctx):
+        guild_id = ctx.guild.id
+        q = guild_queues.get(guild_id, deque())
+        if not q:
+            await ctx.respond('Queue is already empty.')
+        else:
+            q.clear()
+            await ctx.respond('Queue cleared.')
     # 현재 재생 중인 곡 정보를 저장
     current_song = {}
 
