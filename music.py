@@ -170,7 +170,13 @@ def register_music_commands(bot):
             if not guild_playing[guild_id]:
                 await play_next(ctx)
         except Exception as e:
-            await ctx.respond(f'Unexpected error: {e}')
+            try:
+                if ctx.response.is_done():
+                    await ctx.followup.send(f'Unexpected error: {e}')
+                else:
+                    await ctx.respond(f'Unexpected error: {e}')
+            except Exception:
+                pass
 
     async def play_next(ctx):
         guild_id = ctx.guild.id
