@@ -154,27 +154,27 @@ def register_music_commands(bot):
                 'format': 'bestaudio',
                 'quiet': True,
             }
+            import os, uuid
             try:
-                with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(url, download=False)
-                    # 오디오가 있는 format 중 bitrate가 높은 것 우선 선택
-                    audio_formats = sorted(
-                        [f for f in info['formats'] if f.get('acodec') != 'none' and f.get('url')],
-                        key=lambda x: x.get('abr', 0),
-                        reverse=True
-                    )
-                    if not audio_formats:
-                        await ctx.followup.send('No audio stream found for this video.')
-                        return
-                    stream_url = audio_formats[0]['url']
+                temp_dir = 'temp_music'
+                os.makedirs(temp_dir, exist_ok=True)
+                temp_filename = os.path.join(temp_dir, f'{uuid.uuid4()}.mp3')
+                ydl_opts_download = {
+                    'format': 'bestaudio/best',
+                    'outtmpl': temp_filename,
+                    'quiet': True,
+                }
+                with youtube_dl.YoutubeDL(ydl_opts_download) as ydl:
+                    info = ydl.extract_info(url, download=True)
                     title = info.get('title', 'Unknown Title')
+                # 다운로드가 끝나면 파일 경로를 큐에 저장
+                guild_queues[guild_id].append({'file': temp_filename, 'title': title, 'ctx': ctx})
+                await ctx.followup.send(f'Added to queue: {title}')
+                if not guild_playing[guild_id]:
+                    await play_next(ctx)
             except Exception as e:
                 await ctx.followup.send(f'Failed to fetch audio: {e}')
                 return
-            guild_queues[guild_id].append({'url': stream_url, 'title': title, 'ctx': ctx})
-            await ctx.followup.send(f'Added to queue: {title}')
-            if not guild_playing[guild_id]:
-                await play_next(ctx)
         except Exception as e:
             await ctx.followup.send(f'Unexpected error: {e}')
 
@@ -189,14 +189,20 @@ def register_music_commands(bot):
                 voice_client = ctx.voice_client
                 guild_playing[guild_id] = True
                 # 현재 곡 정보 저장
-                current_song[guild_id] = {'title': next_song['title'], 'url': next_song['url']}
+                current_song[guild_id] = {'title': next_song['title'], 'file': next_song['file']}
+                import os
                 def after_playing(error):
+                    # 파일 삭제
+                    try:
+                        if os.path.exists(next_song['file']):
+                            os.remove(next_song['file'])
+                    except Exception:
+                        pass
                     coro = play_next(next_song['ctx'])
                     asyncio.run_coroutine_threadsafe(coro, main_loop)
                 try:
                     source = discord.FFmpegPCMAudio(
-                        next_song['url'],
-                        before_options='-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+                        next_song['file'],
                         options='-vn'
                     )
                     voice_client.play(source, after=after_playing)
@@ -204,9 +210,15 @@ def register_music_commands(bot):
                     await next_song['ctx'].respond(f'Failed to play audio: {e}')
                     guild_playing[guild_id] = False
                     current_song[guild_id] = None
+                    # 파일 삭제
+                    try:
+                        if os.path.exists(next_song['file']):
+                            os.remove(next_song['file'])
+                    except Exception:
+                        pass
                     return
-                # 곡 정보와 URL을 함께 출력
-                coro = next_song['ctx'].respond(f'Now playing: {next_song["title"]}\nURL: {next_song["url"]}')
+                # 곡 정보와 파일 경로를 함께 출력
+                coro = next_song['ctx'].respond(f'Now playing: {next_song["title"]}')
                 asyncio.run_coroutine_threadsafe(coro, main_loop)
             else:
                 guild_playing[guild_id] = False
