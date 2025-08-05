@@ -9,6 +9,38 @@ guild_queues = {}  # {guild_id: deque([...])}
 guild_playing = {} # {guild_id: bool}
 
 def register_music_commands(bot):
+    import random
+
+    @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Repeat the current song.")
+    async def repeat(ctx):
+        guild_id = ctx.guild.id
+        voice_client = ctx.voice_client
+        current = None
+        # 현재 곡 정보 가져오기
+        if hasattr(bot, 'play_next') and hasattr(bot.play_next, '__closure__'):
+            # current_song dict 접근
+            for cell in bot.play_next.__closure__:
+                if isinstance(cell.cell_contents, dict) and 'title' in cell.cell_contents.get(guild_id, {}):
+                    current = cell.cell_contents.get(guild_id)
+                    break
+        # fallback: nowplaying 명령어에서 사용하는 current_song dict
+        if not current:
+            current = globals().get('current_song', {}).get(guild_id)
+        if current:
+            guild_queues[guild_id].appendleft({'url': current['url'], 'title': current['title'], 'ctx': ctx})
+            await ctx.respond(f'Repeated: {current["title"]}')
+        else:
+            await ctx.respond('No song is currently playing.')
+
+    @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Shuffle the music queue.")
+    async def shuffle(ctx):
+        guild_id = ctx.guild.id
+        q = guild_queues.get(guild_id, deque())
+        if len(q) < 2:
+            await ctx.respond('Not enough songs in queue to shuffle.')
+            return
+        random.shuffle(q)
+        await ctx.respond('Queue shuffled.')
     @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Skip the current song.")
     async def skip(ctx):
         voice_client = ctx.voice_client
