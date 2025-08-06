@@ -400,7 +400,13 @@ async def play_next(ctx):
                         related_videos = get_related_videos(video_id, max_results=5)
                         if related_videos:
                             next_video = related_videos[0]
-                            next_url = next_video.get('webpage_url')
+                            next_id = next_video.get('id') # Use get('id')
+                            if not next_id:
+                                print(f"[autoplay] Could not find video ID in related video object: {next_video}", flush=True)
+                                await ctx.channel.send('Autoplay: 추천곡 정보가 올바르지 않습니다.') # Use channel.send
+                                return
+
+                            next_url = f"https://www.youtube.com/watch?v={next_id}" # Build URL
                             print(f"[autoplay] Found related video (yt-dlp): {next_url}", flush=True)
 
                             # ytdl 옵션 설정
@@ -421,7 +427,7 @@ async def play_next(ctx):
                                 reverse=True
                             )
                             if not audio_formats:
-                                await ctx.respond('Autoplay: 추천곡의 오디오 스트림을 찾지 못했습니다.')
+                                await ctx.channel.send('Autoplay: 추천곡의 오디오 스트림을 찾지 못했습니다.') # Use channel.send
                             else:
                                 stream_url = audio_formats[0]['url']
                                 title = info.get('title', 'Unknown Title')
@@ -433,17 +439,17 @@ async def play_next(ctx):
                                 
                                 # play_next를 다시 호출하여 즉시 재생
                                 await play_next(ctx)
-                                return # 중요: play_next가 다시 호출되었으므로 현재 실행을 종료
+                                return 
 
                         else:
                             print(f"[autoplay] No related videos found (yt-dlp).", flush=True)
-                            await ctx.respond('Autoplay: 추천곡을 찾지 못했습니다. (yt-dlp)')
+                            await ctx.channel.send('Autoplay: 추천곡을 찾지 못했습니다. (yt-dlp)') # Use channel.send
                     except Exception as e:
                         print(f"[autoplay] Failed to fetch related video or play next song: {e}", flush=True)
-                        await ctx.respond(f'Autoplay: 추천곡을 재생하지 못했습니다: {e}')
+                        await ctx.channel.send(f'Autoplay: 추천곡을 재생하지 못했습니다: {e}') # Use channel.send
                 else:
                     print(f"[autoplay] Could not extract video ID from url: {last_url}", flush=True)
-                    await ctx.respond('Autoplay: 현재 곡의 유튜브 ID를 추출하지 못했습니다.')
+                    await ctx.channel.send('Autoplay: 현재 곡의 유튜브 ID를 추출하지 못했습니다.') # Use channel.send
             guild_playing[guild_id] = False
             current_song[guild_id] = None
     except Exception as e:
