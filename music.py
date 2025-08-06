@@ -109,53 +109,54 @@ def register_music_commands(bot):
                     print(f"[playlist] Author not in voice channel", flush=True)
                     await ctx.followup.send("You need to be in a voice channel to play music.")
                     return
-            ydl_opts = {
-                'format': 'bestaudio',
-                'quiet': False,
+            # Use 'extract_flat' to get playlist entries quickly without full extraction.
+            ydl_opts_fast = {
+                'quiet': True,
                 'noplaylist': False,
+                'extract_flat': True,
             }
 
-            async def fetch_info():
+            async def fetch_playlist_info():
                 loop = asyncio.get_event_loop()
-                print(f"[playlist] Starting yt-dlp extraction for url: {url}", flush=True)
-                with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-                    info = await loop.run_in_executor(None, functools.partial(ydl.extract_info, url, False))
-                print(f"[playlist] yt-dlp extraction finished for url: {url}", flush=True)
+                print(f"[playlist] Starting fast yt-dlp extraction for url: {url}", flush=True)
+                with youtube_dl.YoutubeDL(ydl_opts_fast) as ydl:
+                    info = await loop.run_in_executor(None, functools.partial(ydl.extract_info, url, download=False))
+                print(f"[playlist] Fast yt-dlp extraction finished for url: {url}", flush=True)
                 return info
             try:
-                info = await asyncio.wait_for(fetch_info(), timeout=30)
-                print(f"[playlist] yt-dlp info received", flush=True)
+                info = await asyncio.wait_for(fetch_playlist_info(), timeout=30)
                 entries = info.get('entries')
                 if not entries:
                     print(f"[playlist] No playlist entries found for url: {url}", flush=True)
                     await ctx.followup.send('No playlist found for this URL.')
                     return
+                
                 added_count = 0
                 for entry in entries:
-                    audio_formats = sorted(
-                        [f for f in entry['formats'] if f.get('acodec') != 'none' and f.get('url')],
-                        key=lambda x: 0 if x.get('abr') is None else x.get('abr'),
-                        reverse=True
-                    )
-                    if not audio_formats:
+                    if not entry or not entry.get('id'):
                         continue
-                    stream_url = audio_formats[0]['url']
+                    
                     title = entry.get('title', 'Unknown Title')
-                    webpage_url = entry.get('webpage_url', url)
+                    # Construct the URL from the ID, as 'webpage_url' might be missing.
+                    webpage_url = f"https://www.youtube.com/watch?v={entry['id']}"
+                    
                     if len(guild_queues[guild_id]) < QUEUE_LIMIT:
-                        guild_queues[guild_id].append({'url': stream_url, 'title': title, 'ctx': ctx, 'webpage_url': webpage_url})
+                        # Add the original webpage_url to the queue. FFmpeg will handle it.
+                        guild_queues[guild_id].append({'url': webpage_url, 'title': title, 'ctx': ctx, 'webpage_url': webpage_url})
                         added_count += 1
+
                 print(f"[playlist] Added {added_count} videos to queue (guild={guild_id})", flush=True)
                 await ctx.followup.send(f'Added {added_count} videos to queue.')
+                
                 if not guild_playing[guild_id] and added_count > 0:
                     print(f"[playlist] Starting playback for guild {guild_id}", flush=True)
                     await play_next(ctx)
             except asyncio.TimeoutError:
-                print(f"[playlist] Timeout during yt-dlp extraction for url: {url}", flush=True)
+                print(f"[playlist] Timeout during yt-dlp playlist extraction for url: {url}", flush=True)
                 await ctx.followup.send('Timeout: 유튜브 플레이리스트 정보 추출이 30초 내에 완료되지 않았습니다.')
                 return
             except Exception as e:
-                print(f"[playlist] Exception during yt-dlp extraction: {e}", flush=True)
+                print(f"[playlist] Exception during yt-dlp playlist extraction: {e}", flush=True)
                 await ctx.followup.send(f'Failed to fetch playlist: {e}')
                 return
         except Exception as e:
