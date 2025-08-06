@@ -15,6 +15,7 @@ QUEUE_LIMIT = 30
 
 guild_queues = {}  # {guild_id: deque([...])}
 guild_playing = {} # {guild_id: bool}
+autoplay_enabled = {}  # {guild_id: bool}  # 자동재생 on/off
 
 def get_guild_queue(guild_id):
     """해당 길드의 큐를 반환하며, 없으면 초기화합니다."""
@@ -57,8 +58,23 @@ def register_music_commands(bot):
             "/clear : 큐 전체 비우기\n"
             "/nowplaying : 현재 재생 곡 정보\n"
             "/leave : 음성 채널에서 봇 퇴장\n"
+            "/autoplay [on/off] : 자동재생 기능 켜기/끄기\n"
         )
         await ctx.respond(help_text)
+
+    # === 음악 명령어: 자동재생 on/off ===
+    @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Toggle autoplay (YouTube 추천곡 자동재생) on/off.")
+    async def autoplay(ctx, mode: str):
+        guild_id = ctx.guild.id
+        mode = mode.lower()
+        if mode in ["on", "켜기", "enable", "true"]:
+            autoplay_enabled[guild_id] = True
+            await ctx.respond("Autoplay가 켜졌습니다. (대기열이 비면 유튜브 추천곡이 자동 재생됩니다)")
+        elif mode in ["off", "끄기", "disable", "false"]:
+            autoplay_enabled[guild_id] = False
+            await ctx.respond("Autoplay가 꺼졌습니다.")
+        else:
+            await ctx.respond("사용법: /autoplay on 또는 /autoplay off")
 
     # === 음악 명령어: 플레이리스트 추가 ===
     @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Play all videos in a YouTube playlist.")
@@ -338,7 +354,6 @@ def register_music_commands(bot):
                 voice_client = ctx.voice_client
                 guild_playing[guild_id] = True
                 # 현재 곡 정보 저장
-                # next_song에 'webpage_url'이 있으면 원본 링크로 저장
                 display_url = next_song.get('webpage_url', next_song['url'])
                 current_song[guild_id] = {'title': next_song['title'], 'url': display_url}
                 print(f"[play_next] Now playing: {next_song['title']} (guild={guild_id})", flush=True)
@@ -361,13 +376,45 @@ def register_music_commands(bot):
                     guild_playing[guild_id] = False
                     current_song[guild_id] = None
                     return
-                # 곡 정보와 원본 유튜브 링크를 함께 출력
                 coro = next_song['ctx'].respond(f'Now playing: {next_song["title"]}\nURL: {display_url}')
                 asyncio.run_coroutine_threadsafe(coro, main_loop)
             else:
                 print(f"[play_next] Queue empty for guild {guild_id}", flush=True)
                 guild_playing[guild_id] = False
                 current_song[guild_id] = None
+                # 자동재생이 켜져 있으면 유튜브 추천곡에서 다음 곡을 찾아 재생
+                if autoplay_enabled.get(guild_id, False) and current_song.get(guild_id):
+                    last_url = current_song[guild_id]['url']
+                    print(f"[autoplay] Trying to fetch related video for url: {last_url}", flush=True)
+                    ydl_opts = {
+                        'format': 'bestaudio',
+                        'quiet': True,
+                        'noplaylist': True,
+                        'extract_flat': 'in_playlist',
+                        'force_generic_extractor': False,
+                    }
+                    async def fetch_related():
+                        loop = asyncio.get_event_loop()
+                        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+                            info = await loop.run_in_executor(None, functools.partial(ydl.extract_info, last_url, False))
+                        return info
+                    try:
+                        info = await asyncio.wait_for(fetch_related(), timeout=15)
+                        related = info.get('related_videos')
+                        if related:
+                            # 가장 첫 번째 추천 영상의 id로 url 생성
+                            next_id = related[0].get('id')
+                            if next_id:
+                                next_url = f'https://www.youtube.com/watch?v={next_id}'
+                                print(f"[autoplay] Found related video: {next_url}", flush=True)
+                                # play 명령어와 동일하게 큐에 추가 후 재생
+                                await ctx.invoke(bot.get_slash_command('play'), url=next_url)
+                                return
+                        print(f"[autoplay] No related videos found.", flush=True)
+                        await ctx.respond('Autoplay: 추천곡을 찾지 못했습니다.')
+                    except Exception as e:
+                        print(f"[autoplay] Failed to fetch related video: {e}", flush=True)
+                        await ctx.respond(f'Autoplay: 추천곡을 가져오지 못했습니다: {e}')
         except Exception as e:
             print(f"[play_next] Unexpected error: {e}", flush=True)
             await ctx.respond(f'Unexpected error: {e}')
