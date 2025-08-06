@@ -397,8 +397,6 @@ async def play_next(ctx):
     try:
         if not guild_queues.get(guild_id):
             print(f"[play_next] Queue is empty for guild {guild_id}.", flush=True)
-            
-            # Autoplay logic when queue becomes empty
             if autoplay_enabled.get(guild_id, False) and current_song.get(guild_id):
                 last_url = current_song[guild_id]['url']
                 print(f"[autoplay] Queue empty, fetching related videos for: {last_url}", flush=True)
@@ -407,9 +405,7 @@ async def play_next(ctx):
                 video_id = match.group(1) if match else None
                 if video_id:
                     try:
-                        # Fetch multiple related videos to fill the queue
-                        related_videos = get_related_videos(video_id, max_results=3) # Fetch 3 songs
-                        
+                        related_videos = get_related_videos(video_id, max_results=3)
                         if related_videos:
                             added_count = 0
                             for video_info in related_videos:
@@ -417,57 +413,57 @@ async def play_next(ctx):
                                     video_id = video_info.get('id')
                                     title = video_info.get('title', 'Unknown Title')
                                     url = f"https://www.youtube.com/watch?v={video_id}"
-                                    
-                                    guild_queues[guild_id].append({
-                                        'url': url,
-                                        'title': title,
-                                        'ctx': ctx,
-                                        'webpage_url': url,
-                                        'prefetched': False # Ensure it's marked for prefetching
-                                    })
+                                    guild_queues[guild_id].append({'url': url, 'title': title, 'ctx': ctx, 'webpage_url': url, 'prefetched': False})
                                     added_count += 1
-                            
                             if added_count > 0:
-                                print(f"[autoplay] Added {added_count} related songs to the queue.", flush=True)
-                                await ctx.channel.send(f'🎶 자동재생: 추천곡 {added_count}개를 재생목록에 추가합니다.')
-                                # Call play_next once to start the newly populated queue
+                                print(f"[autoplay] Silently added {added_count} related songs to the queue.", flush=True)
+                                autoplay_state[guild_id] = True
                                 await play_next(ctx)
-                                return # IMPORTANT: Return after starting the new queue
+                                return
                             else:
                                 print("[autoplay] Found related videos, but none were valid.", flush=True)
                                 await ctx.channel.send('Autoplay: 추천곡을 찾았지만, 목록에 추가할 수 없습니다.')
-
                         else:
                             print(f"[autoplay] No related videos found.", flush=True)
                             await ctx.channel.send('Autoplay: 추천곡을 찾지 못했습니다.')
-
                     except Exception as e:
                         print(f"[autoplay] Exception during autoplay logic: {e}", flush=True)
                         await ctx.channel.send(f'Autoplay: 추천곡 재생 중 오류가 발생했습니다: {e}')
                 else:
                     print(f"[autoplay] Could not extract video ID from url: {last_url}", flush=True)
                     await ctx.channel.send('Autoplay: 현재 곡의 유튜브 ID를 추출하지 못했습니다.')
-            
-            # If autoplay is off or fails, stop playback
             guild_playing[guild_id] = False
             current_song[guild_id] = None
-            print(f"[play_next] Stopping playback for guild {guild_id}.", flush=True)
             return
 
         next_song = guild_queues[guild_id].popleft()
         voice_client = ctx.voice_client
         if not voice_client or not voice_client.is_connected():
-            print(f"[play_next] Voice client not connected for guild {guild_id}. Stopping.", flush=True)
             guild_playing[guild_id] = False
             return
+
+        play_url = next_song.get('url')
+        if not next_song.get('prefetched', False):
+            print(f"[play_next] Song not prefetched. Fetching stream URL for: {next_song['title']}", flush=True)
+            try:
+                ydl_opts = {'format': 'bestaudio', 'quiet': True, 'noplaylist': True}
+                loop = asyncio.get_event_loop()
+                with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+                    info = await loop.run_in_executor(None, functools.partial(ydl.extract_info, next_song['webpage_url'], download=False))
+                audio_formats = sorted([f for f in info['formats'] if f.get('acodec') != 'none' and f.get('url')], key=lambda x: 0 if x.get('abr') is None else x.get('abr'), reverse=True)
+                if not audio_formats:
+                    raise ValueError("No suitable audio stream found")
+                play_url = audio_formats[0]['url']
+                print(f"[play_next] Stream URL fetched successfully.", flush=True)
+            except Exception as e:
+                print(f"[play_next] Failed to fetch stream URL for {next_song['title']}: {e}", flush=True)
+                await ctx.channel.send(f"'{next_song['title']}'을(를) 재생할 수 없어 건너뜁니다.")
+                await play_next(ctx)
+                return
 
         guild_playing[guild_id] = True
         display_url = next_song.get('webpage_url', next_song['url'])
         current_song[guild_id] = {'title': next_song['title'], 'url': display_url}
-        
-        play_url = next_song['url']
-        is_prefetched = next_song.get('prefetched', False)
-        print(f"[play_next] Now playing: {next_song['title']} (Prefetched: {is_prefetched})", flush=True)
         
         def after_playing(error):
             if error:
@@ -476,29 +472,18 @@ async def play_next(ctx):
             asyncio.run_coroutine_threadsafe(coro, main_loop)
         
         try:
-            source = discord.FFmpegPCMAudio(
-                play_url,
-                before_options='-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -probesize 32M',
-                options='-vn'
-            )
+            source = discord.FFmpegPCMAudio(play_url, before_options='-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -probesize 32M', options='-vn')
             voice_client.play(source, after=after_playing)
-            
-            coro = ctx.channel.send(f'Now playing: {next_song["title"]}\nURL: {display_url}')
-            asyncio.run_coroutine_threadsafe(coro, main_loop)
-
+            await ctx.channel.send(f'Now playing: {next_song["title"]}\nURL: {display_url}')
             if guild_queues[guild_id]:
-                print(f"[play_next] Triggering prefetch for the next song.", flush=True)
                 asyncio.create_task(prefetch_next_song(guild_id))
-
         except Exception as e:
-            print(f"[play_next] Failed to play audio for {next_song['title']}: {e}", flush=True)
-            await ctx.channel.send(f'Failed to play audio: {e}')
-            guild_playing[guild_id] = False
+            print(f"[play_next] Critical error trying to play {next_song['title']}: {e}", flush=True)
+            await ctx.channel.send(f"'{next_song['title']}' 재생 중 심각한 오류가 발생했습니다.")
             await play_next(ctx)
 
     except Exception as e:
         print(f"[play_next] Unexpected error in play_next: {e}", flush=True)
-        # await ctx.channel.send(f'An unexpected error occurred in play_next: {e}')
         guild_playing[guild_id] = False
 
 def register_music_events(bot):
