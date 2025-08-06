@@ -65,7 +65,7 @@ def register_music_commands(bot):
 
     # === 음악 명령어: 자동재생 on/off ===
     @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Toggle autoplay (YouTube 추천곡 자동재생) on/off.")
-    async def autoplay(ctx, mode: None):
+    async def autoplay(ctx, mode: str):
         guild_id = ctx.guild.id
         mode = mode.lower()
         if mode == "on":
