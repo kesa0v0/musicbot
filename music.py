@@ -393,8 +393,6 @@ async def play_next(ctx):
                     'format': 'bestaudio',
                     'quiet': True,
                     'noplaylist': True,
-                    'extract_flat': 'in_playlist',
-                    'force_generic_extractor': False,
                 }
                 async def fetch_related():
                     loop = asyncio.get_event_loop()
