@@ -4,6 +4,7 @@ print('=== music.py started ===', flush=True)
 import discord
 import asyncio
 import yt_dlp as youtube_dl
+from utils import get_related_videos
 from collections import deque
 
 import random
@@ -389,34 +390,28 @@ async def play_next(ctx):
             if autoplay_enabled.get(guild_id, False) and current_song.get(guild_id):
                 last_url = current_song[guild_id]['url']
                 print(f"[autoplay] Trying to fetch related video for url: {last_url}", flush=True)
-                ydl_opts = {
-                    'format': 'bestaudio',
-                    'quiet': True,
-                    'noplaylist': True,
-                }
-                async def fetch_related():
-                    loop = asyncio.get_event_loop()
-                    with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-                        info = await loop.run_in_executor(None, functools.partial(ydl.extract_info, last_url, False))
-                    return info
-                try:
-                    info = await asyncio.wait_for(fetch_related(), timeout=15)
-                    related = info.get('related_videos')
-                    if related:
-                        # 가장 첫 번째 추천 영상의 id로 url 생성
-                        next_id = related[0].get('id')
-                        if next_id:
+                # 유튜브 영상 ID 추출
+                import re
+                match = re.search(r"v=([\w-]+)", last_url)
+                video_id = match.group(1) if match else None
+                if video_id:
+                    try:
+                        related = get_related_videos(video_id, max_results=1)
+                        if related:
+                            next_id = related[0]['videoId']
                             next_url = f'https://www.youtube.com/watch?v={next_id}'
-                            print(f"[autoplay] Found related video: {next_url}", flush=True)
-                            # play 명령어와 동일하게 큐에 추가 후 재생
+                            print(f"[autoplay] Found related video (YouTube API): {next_url}", flush=True)
                             await ctx.invoke(ctx.bot.get_slash_command('play'), url=next_url)
-                            # current_song/guild_playing은 play에서 처리됨
                             return
-                    print(f"[autoplay] No related videos found.", flush=True)
-                    await ctx.respond('Autoplay: 추천곡을 찾지 못했습니다.')
-                except Exception as e:
-                    print(f"[autoplay] Failed to fetch related video: {e}", flush=True)
-                    await ctx.respond(f'Autoplay: 추천곡을 가져오지 못했습니다: {e}')
+                        else:
+                            print(f"[autoplay] No related videos found (YouTube API).", flush=True)
+                            await ctx.respond('Autoplay: 추천곡을 찾지 못했습니다. (YouTube API)')
+                    except Exception as e:
+                        print(f"[autoplay] Failed to fetch related video (YouTube API): {e}", flush=True)
+                        await ctx.respond(f'Autoplay: 추천곡을 가져오지 못했습니다: {e}')
+                else:
+                    print(f"[autoplay] Could not extract video ID from url: {last_url}", flush=True)
+                    await ctx.respond('Autoplay: 현재 곡의 유튜브 ID를 추출하지 못했습니다.')
             guild_playing[guild_id] = False
             current_song[guild_id] = None
     except Exception as e:
