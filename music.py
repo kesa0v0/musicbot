@@ -472,7 +472,7 @@ async def play_next(ctx):
             asyncio.run_coroutine_threadsafe(coro, main_loop)
         
         try:
-            source = discord.FFmpegPCMAudio(play_url, before_options='-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -probesize 32M', options='-vn')
+            source = discord.FFmpegPCMAudio(play_url, before_options='-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 8M -probesize 32M', options='-vn')
             voice_client.play(source, after=after_playing)
             await ctx.channel.send(f'Now playing: {next_song["title"]}\nURL: {display_url}')
             if guild_queues[guild_id]:
