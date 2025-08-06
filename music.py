@@ -396,11 +396,11 @@ async def play_next(ctx):
                 video_id = match.group(1) if match else None
                 if video_id:
                     try:
-                        related = get_related_videos(video_id, max_results=1)
-                        if related:
-                            next_id = related[0]['videoId']
-                            next_url = f'https://www.youtube.com/watch?v={next_id}'
-                            print(f"[autoplay] Found related video (YouTube API): {next_url}", flush=True)
+                        related_videos = get_related_videos(video_id, max_results=1)
+                        if related_videos:
+                            next_video = related_videos[0]
+                            next_url = next_video.get('webpage_url')
+                            print(f"[autoplay] Found related video (yt-dlp): {next_url}", flush=True)
 
                             # ytdl 옵션 설정
                             ydl_opts = {
@@ -435,8 +435,8 @@ async def play_next(ctx):
                                 return # 중요: play_next가 다시 호출되었으므로 현재 실행을 종료
 
                         else:
-                            print(f"[autoplay] No related videos found (YouTube API).", flush=True)
-                            await ctx.respond('Autoplay: 추천곡을 찾지 못했습니다. (YouTube API)')
+                            print(f"[autoplay] No related videos found (yt-dlp).", flush=True)
+                            await ctx.respond('Autoplay: 추천곡을 찾지 못했습니다. (yt-dlp)')
                     except Exception as e:
                         print(f"[autoplay] Failed to fetch related video or play next song: {e}", flush=True)
                         await ctx.respond(f'Autoplay: 추천곡을 재생하지 못했습니다: {e}')
