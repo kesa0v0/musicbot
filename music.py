@@ -503,8 +503,8 @@ async def play_next(ctx):
             if guild_queues.get(guild_id):
                 # 큐에 다음 곡이 있으면, 표준 프리페칭 실행
                 asyncio.create_task(prefetch_next_song(guild_id))
-            elif autoplay_enabled.get(guild_id, True):
-                # 큐가 비었고 자동재생이 켜져있으면, 다음 자동재생 곡들을 선제적으로 준비
+            elif autoplay_enabled.get(guild_id, True) and next_song.get('added_by') == 'user':
+                # 큐가 비었고, "사용자가 추가한 마지막 곡"이 재생을 시작했으며, 자동재생이 켜져있을 때만 실행됩니다.
                 print(f"[play_next] Last user song is playing. Triggering proactive autoplay population.", flush=True)
                 asyncio.create_task(populate_autoplay_queue(ctx))
 
