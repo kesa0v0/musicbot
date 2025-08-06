@@ -408,22 +408,46 @@ async def play_next(ctx):
                     try:
                         related_videos = get_related_videos(video_id, max_results=3)
                         if related_videos:
-                            added_count = 0
+                            # --- 선제적 프리페칭 로직 ---
+                            first_song_info = related_videos.pop(0) # 첫 곡 정보 분리
+                            first_song_id = first_song_info.get('id')
+                            first_song_title = first_song_info.get('title', 'Unknown Title')
+                            first_song_url = f"https://www.youtube.com/watch?v={first_song_id}"
+                            
+                            print(f"[autoplay] Proactively prefetching first song: {first_song_title}", flush=True)
+                            try:
+                                ydl_opts = {'format': 'bestaudio[ext=m4a]/bestaudio/best', 'quiet': True, 'noplaylist': True}
+                                loop = asyncio.get_event_loop()
+                                with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+                                    info = await loop.run_in_executor(None, functools.partial(ydl.extract_info, first_song_url, download=False))
+                                audio_formats = sorted([f for f in info['formats'] if f.get('acodec') != 'none' and f.get('url')], key=lambda x: 0 if x.get('abr') is None else x.get('abr'), reverse=True)
+                                if not audio_formats:
+                                    raise ValueError("No suitable audio stream found for proactive prefetch")
+                                stream_url = audio_formats[0]['url']
+                                
+                                # 선제적으로 프리페칭된 첫 곡을 큐에 추가
+                                guild_queues[guild_id].append({'url': stream_url, 'title': first_song_title, 'ctx': ctx, 'webpage_url': first_song_url, 'prefetched': True})
+                                print(f"[autoplay] Proactive prefetch successful.", flush=True)
+
+                            except Exception as e:
+                                print(f"[autoplay] Proactive prefetch failed: {e}", flush=True)
+                                await ctx.channel.send(f"Autoplay: 추천곡 '{first_song_title}'의 정보를 가져오지 못했습니다.")
+                                # 실패 시에도 나머지 곡들은 추가 시도
+
+                            # 나머지 추천곡들을 큐에 추가
                             for video_info in related_videos:
                                 if isinstance(video_info, dict) and video_info.get('id'):
                                     video_id = video_info.get('id')
                                     title = video_info.get('title', 'Unknown Title')
                                     url = f"https://www.youtube.com/watch?v={video_id}"
                                     guild_queues[guild_id].append({'url': url, 'title': title, 'ctx': ctx, 'webpage_url': url, 'prefetched': False})
-                                    added_count += 1
-                            if added_count > 0:
-                                print(f"[autoplay] Silently added {added_count} related songs to the queue.", flush=True)
+                            
+                            if guild_queues[guild_id]:
+                                print(f"[autoplay] Silently added songs to the queue.", flush=True)
                                 autoplay_state[guild_id] = True
                                 await play_next(ctx)
                                 return
-                            else:
-                                print("[autoplay] Found related videos, but none were valid.", flush=True)
-                                await ctx.channel.send('Autoplay: 추천곡을 찾았지만, 목록에 추가할 수 없습니다.')
+
                         else:
                             print(f"[autoplay] No related videos found.", flush=True)
                             await ctx.channel.send('Autoplay: 추천곡을 찾지 못했습니다.')
