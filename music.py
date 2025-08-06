@@ -396,7 +396,7 @@ async def play_next(ctx):
                 video_id = match.group(1) if match else None
                 if video_id:
                     try:
-                        related_videos = get_related_videos(video_id, max_results=1)
+                        related_videos = get_related_videos(video_id, max_results=5)
                         if related_videos:
                             next_video = related_videos[0]
                             next_url = next_video.get('webpage_url')
