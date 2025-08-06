@@ -269,6 +269,7 @@ def register_music_commands(bot):
                 guild_playing[guild_id] = False
             if guild_id in guild_queues:
                 guild_queues[guild_id].clear()
+            autoplay_state[guild_id] = False # 자동재생 상태 초기화
             await ctx.respond("Bot has left the voice channel and cleared the queue.")
         else:
             await ctx.respond("Bot is not connected to any voice channel.")
@@ -395,42 +396,62 @@ async def play_next(ctx):
     guild_id = ctx.guild.id
     try:
         if not guild_queues.get(guild_id):
-            print(f"[play_next] Queue is empty for guild {guild_id}. Stopping playback.", flush=True)
-            guild_playing[guild_id] = False
-            current_song[guild_id] = None
+            print(f"[play_next] Queue is empty for guild {guild_id}.", flush=True)
+            
             # Autoplay logic when queue becomes empty
             if autoplay_enabled.get(guild_id, False) and current_song.get(guild_id):
                 last_url = current_song[guild_id]['url']
-                print(f"[autoplay] Queue empty, trying to fetch related video for url: {last_url}", flush=True)
+                print(f"[autoplay] Queue empty, fetching related videos for: {last_url}", flush=True)
                 import re
                 match = re.search(r"v=([\w-]+)", last_url)
                 video_id = match.group(1) if match else None
                 if video_id:
                     try:
-                        related_videos = get_related_videos(video_id, max_results=5)
-                        next_video_info = None
-                        if related_videos and isinstance(related_videos, list):
-                            for video in related_videos:
-                                if isinstance(video, dict) and video.get('id'):
-                                    next_video_info = video
-                                    break
-                        if next_video_info:
-                            next_id = next_video_info.get('id')
-                            title = next_video_info.get('title', 'Unknown Title')
-                            next_url = f"https://www.youtube.com/watch?v={next_id}"
-                            print(f"[autoplay] Found related video, adding to queue: {next_url}", flush=True)
-                            guild_queues[guild_id].append({'url': next_url, 'title': title, 'ctx': ctx, 'webpage_url': next_url})
-                            await play_next(ctx)
-                            return
+                        # Fetch multiple related videos to fill the queue
+                        related_videos = get_related_videos(video_id, max_results=3) # Fetch 3 songs
+                        
+                        if related_videos:
+                            added_count = 0
+                            for video_info in related_videos:
+                                if isinstance(video_info, dict) and video_info.get('id'):
+                                    video_id = video_info.get('id')
+                                    title = video_info.get('title', 'Unknown Title')
+                                    url = f"https://www.youtube.com/watch?v={video_id}"
+                                    
+                                    guild_queues[guild_id].append({
+                                        'url': url,
+                                        'title': title,
+                                        'ctx': ctx,
+                                        'webpage_url': url,
+                                        'prefetched': False # Ensure it's marked for prefetching
+                                    })
+                                    added_count += 1
+                            
+                            if added_count > 0:
+                                print(f"[autoplay] Added {added_count} related songs to the queue.", flush=True)
+                                await ctx.channel.send(f'🎶 자동재생: 추천곡 {added_count}개를 재생목록에 추가합니다.')
+                                # Call play_next once to start the newly populated queue
+                                await play_next(ctx)
+                                return # IMPORTANT: Return after starting the new queue
+                            else:
+                                print("[autoplay] Found related videos, but none were valid.", flush=True)
+                                await ctx.channel.send('Autoplay: 추천곡을 찾았지만, 목록에 추가할 수 없습니다.')
+
                         else:
-                            print(f"[autoplay] No valid related videos found.", flush=True)
+                            print(f"[autoplay] No related videos found.", flush=True)
                             await ctx.channel.send('Autoplay: 추천곡을 찾지 못했습니다.')
+
                     except Exception as e:
                         print(f"[autoplay] Exception during autoplay logic: {e}", flush=True)
                         await ctx.channel.send(f'Autoplay: 추천곡 재생 중 오류가 발생했습니다: {e}')
                 else:
                     print(f"[autoplay] Could not extract video ID from url: {last_url}", flush=True)
                     await ctx.channel.send('Autoplay: 현재 곡의 유튜브 ID를 추출하지 못했습니다.')
+            
+            # If autoplay is off or fails, stop playback
+            guild_playing[guild_id] = False
+            current_song[guild_id] = None
+            print(f"[play_next] Stopping playback for guild {guild_id}.", flush=True)
             return
 
         next_song = guild_queues[guild_id].popleft()
