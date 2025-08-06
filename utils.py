@@ -15,7 +15,8 @@ def get_related_videos(video_id, max_results=5):
         part='snippet',
         relatedToVideoId=video_id,
         type='video',
-        maxResults=max_results
+        maxResults=max_results,
+        q=''  # 검색어를 비워두면 관련 영상만 가져옵니다.
     ).execute()
     return [
         {
