@@ -398,48 +398,27 @@ async def play_next(ctx):
                     try:
                         related_videos = get_related_videos(video_id, max_results=5)
                         
-                        # Debugging: Print the raw response from the utility function
-                        print(f"[autoplay_debug] Raw related_videos response: {related_videos}", flush=True)
-
                         next_video_info = None
                         if related_videos and isinstance(related_videos, list):
-                            # Find the first valid video in the list
                             for video in related_videos:
                                 if isinstance(video, dict) and video.get('id'):
                                     next_video_info = video
-                                    break  # Found a valid one, exit loop
+                                    break
 
                         if next_video_info:
                             next_id = next_video_info.get('id')
+                            title = next_video_info.get('title', 'Unknown Title')
                             next_url = f"https://www.youtube.com/watch?v={next_id}"
-                            print(f"[autoplay] Found valid related video: {next_url}", flush=True)
-
-                            ydl_opts = {
-                                'format': 'bestaudio',
-                                'quiet': False,
-                                'noplaylist': True,
-                            }
-                            loop = asyncio.get_event_loop()
-                            with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-                                info = await loop.run_in_executor(None, functools.partial(ydl.extract_info, next_url, False))
                             
-                            audio_formats = sorted(
-                                [f for f in info['formats'] if f.get('acodec') != 'none' and f.get('url')],
-                                key=lambda x: 0 if x.get('abr') is None else x.get('abr'),
-                                reverse=True
-                            )
-                            if not audio_formats:
-                                await ctx.channel.send('Autoplay: 추천곡의 오디오 스트림을 찾지 못했습니다.')
-                            else:
-                                stream_url = audio_formats[0]['url']
-                                title = info.get('title', 'Unknown Title')
-                                webpage_url = info.get('webpage_url', next_url)
-                                
-                                guild_queues[guild_id].append({'url': stream_url, 'title': title, 'ctx': ctx, 'webpage_url': webpage_url})
-                                print(f"[autoplay] Added to queue: {title} (guild={guild_id})", flush=True)
-                                
-                                await play_next(ctx)
-                                return
+                            print(f"[autoplay] Found related video, adding to queue: {next_url}", flush=True)
+
+                            # Add to queue directly with the webpage_url.
+                            # FFmpegPCMAudio will handle the extraction, which is much faster.
+                            guild_queues[guild_id].append({'url': next_url, 'title': title, 'ctx': ctx, 'webpage_url': next_url})
+                            
+                            # Call play_next to play immediately
+                            await play_next(ctx)
+                            return
                         else:
                             print(f"[autoplay] No valid related videos found in the list.", flush=True)
                             await ctx.channel.send('Autoplay: 추천곡을 찾지 못했습니다.')
