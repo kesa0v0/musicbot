@@ -394,6 +394,7 @@ async def prefetch_next_song(guild_id):
 # === play_next를 전역 함수로 분리 (프리페칭 로직 추가) ===
 async def play_next(ctx):
     guild_id = ctx.guild.id
+    global autoplay_state # 전역 변수 사용 명시
     try:
         if not guild_queues.get(guild_id):
             print(f"[play_next] Queue is empty for guild {guild_id}.", flush=True)
@@ -446,7 +447,7 @@ async def play_next(ctx):
         if not next_song.get('prefetched', False):
             print(f"[play_next] Song not prefetched. Fetching stream URL for: {next_song['title']}", flush=True)
             try:
-                ydl_opts = {'format': 'bestaudio', 'quiet': True, 'noplaylist': True}
+                ydl_opts = {'format': 'bestaudio[ext=m4a]/bestaudio/best', 'quiet': True, 'noplaylist': True}
                 loop = asyncio.get_event_loop()
                 with youtube_dl.YoutubeDL(ydl_opts) as ydl:
                     info = await loop.run_in_executor(None, functools.partial(ydl.extract_info, next_song['webpage_url'], download=False))
