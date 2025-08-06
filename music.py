@@ -382,7 +382,8 @@ async def play_next(ctx):
                 guild_playing[guild_id] = False
                 current_song[guild_id] = None
                 return
-            coro = next_song['ctx'].respond(f'Now playing: {next_song["title"]}\nURL: {display_url}')
+            # Use channel.send instead of respond to avoid interaction timeout
+            coro = next_song['ctx'].channel.send(f'Now playing: {next_song["title"]}\nURL: {display_url}')
             asyncio.run_coroutine_threadsafe(coro, main_loop)
         else:
             print(f"[play_next] Queue empty for guild {guild_id}", flush=True)
