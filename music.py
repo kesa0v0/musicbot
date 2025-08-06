@@ -391,65 +391,65 @@ async def play_next(ctx):
             if autoplay_enabled.get(guild_id, False) and current_song.get(guild_id):
                 last_url = current_song[guild_id]['url']
                 print(f"[autoplay] Trying to fetch related video for url: {last_url}", flush=True)
-                # 유튜브 영상 ID 추출
                 import re
                 match = re.search(r"v=([\w-]+)", last_url)
                 video_id = match.group(1) if match else None
                 if video_id:
                     try:
                         related_videos = get_related_videos(video_id, max_results=5)
-                        if related_videos:
-                            next_video = related_videos[0]
-                            next_id = next_video.get('id') # Use get('id')
-                            if not next_id:
-                                print(f"[autoplay] Could not find video ID in related video object: {next_video}", flush=True)
-                                await ctx.channel.send('Autoplay: 추천곡 정보가 올바르지 않습니다.') # Use channel.send
-                                return
+                        
+                        # Debugging: Print the raw response from the utility function
+                        print(f"[autoplay_debug] Raw related_videos response: {related_videos}", flush=True)
 
-                            next_url = f"https://www.youtube.com/watch?v={next_id}" # Build URL
-                            print(f"[autoplay] Found related video (yt-dlp): {next_url}", flush=True)
+                        next_video_info = None
+                        if related_videos and isinstance(related_videos, list):
+                            # Find the first valid video in the list
+                            for video in related_videos:
+                                if isinstance(video, dict) and video.get('id'):
+                                    next_video_info = video
+                                    break  # Found a valid one, exit loop
 
-                            # ytdl 옵션 설정
+                        if next_video_info:
+                            next_id = next_video_info.get('id')
+                            next_url = f"https://www.youtube.com/watch?v={next_id}"
+                            print(f"[autoplay] Found valid related video: {next_url}", flush=True)
+
                             ydl_opts = {
                                 'format': 'bestaudio',
                                 'quiet': False,
                                 'noplaylist': True,
                             }
-                            # 추천곡 정보 추출
                             loop = asyncio.get_event_loop()
                             with youtube_dl.YoutubeDL(ydl_opts) as ydl:
                                 info = await loop.run_in_executor(None, functools.partial(ydl.extract_info, next_url, False))
                             
-                            # 오디오 스트림 URL 및 정보 추출
                             audio_formats = sorted(
                                 [f for f in info['formats'] if f.get('acodec') != 'none' and f.get('url')],
                                 key=lambda x: 0 if x.get('abr') is None else x.get('abr'),
                                 reverse=True
                             )
                             if not audio_formats:
-                                await ctx.channel.send('Autoplay: 추천곡의 오디오 스트림을 찾지 못했습니다.') # Use channel.send
+                                await ctx.channel.send('Autoplay: 추천곡의 오디오 스트림을 찾지 못했습니다.')
                             else:
                                 stream_url = audio_formats[0]['url']
                                 title = info.get('title', 'Unknown Title')
                                 webpage_url = info.get('webpage_url', next_url)
                                 
-                                # 큐에 추가
                                 guild_queues[guild_id].append({'url': stream_url, 'title': title, 'ctx': ctx, 'webpage_url': webpage_url})
                                 print(f"[autoplay] Added to queue: {title} (guild={guild_id})", flush=True)
                                 
-                                # play_next를 다시 호출하여 즉시 재생
                                 await play_next(ctx)
-                                return 
-
+                                return
                         else:
-                            print(f"[autoplay] No related videos found (yt-dlp).", flush=True)
-                            await ctx.channel.send('Autoplay: 추천곡을 찾지 못했습니다. (yt-dlp)') # Use channel.send
+                            print(f"[autoplay] No valid related videos found in the list.", flush=True)
+                            await ctx.channel.send('Autoplay: 추천곡을 찾지 못했습니다.')
+
                     except Exception as e:
-                        print(f"[autoplay] Failed to fetch related video or play next song: {e}", flush=True)
-                        await ctx.channel.send(f'Autoplay: 추천곡을 재생하지 못했습니다: {e}') # Use channel.send
+                        print(f"[autoplay] Exception during autoplay logic: {e}", flush=True)
+                        await ctx.channel.send(f'Autoplay: 추천곡 재생 중 오류가 발생했습니다: {e}')
                 else:
                     print(f"[autoplay] Could not extract video ID from url: {last_url}", flush=True)
-                    await ctx.channel.send('Autoplay: 현재 곡의 유튜브 ID를 추출하지 못했습니다.') # Use channel.send
+                    await ctx.channel.send('Autoplay: 현재 곡의 유튜브 ID를 추출하지 못했습니다.')
             guild_playing[guild_id] = False
             current_song[guild_id] = None
     except Exception as e:
