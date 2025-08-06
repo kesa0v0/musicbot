@@ -385,8 +385,6 @@ async def play_next(ctx):
             asyncio.run_coroutine_threadsafe(coro, main_loop)
         else:
             print(f"[play_next] Queue empty for guild {guild_id}", flush=True)
-            guild_playing[guild_id] = False
-            current_song[guild_id] = None
             # 자동재생이 켜져 있으면 유튜브 추천곡에서 다음 곡을 찾아 재생
             if autoplay_enabled.get(guild_id, False) and current_song.get(guild_id):
                 last_url = current_song[guild_id]['url']
@@ -414,12 +412,15 @@ async def play_next(ctx):
                             print(f"[autoplay] Found related video: {next_url}", flush=True)
                             # play 명령어와 동일하게 큐에 추가 후 재생
                             await ctx.invoke(ctx.bot.get_slash_command('play'), url=next_url)
+                            # current_song/guild_playing은 play에서 처리됨
                             return
                     print(f"[autoplay] No related videos found.", flush=True)
                     await ctx.respond('Autoplay: 추천곡을 찾지 못했습니다.')
                 except Exception as e:
                     print(f"[autoplay] Failed to fetch related video: {e}", flush=True)
                     await ctx.respond(f'Autoplay: 추천곡을 가져오지 못했습니다: {e}')
+            guild_playing[guild_id] = False
+            current_song[guild_id] = None
     except Exception as e:
         print(f"[play_next] Unexpected error: {e}", flush=True)
         await ctx.respond(f'Unexpected error: {e}')
