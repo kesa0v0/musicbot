@@ -261,6 +261,7 @@ def register_music_commands(bot):
     # === 음악 명령어: 음성 채널에서 봇 퇴장 ===
     @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Disconnect the bot from the voice channel.")
     async def leave(ctx):
+        global autoplay_state
         voice_client = ctx.voice_client
         if voice_client:
             await voice_client.disconnect()
