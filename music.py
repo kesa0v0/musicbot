@@ -1,57 +1,166 @@
-print('=== music.py started ===', flush=True)
-
-
 import discord
 import asyncio
 import yt_dlp as youtube_dl
-from utils import get_related_videos
+import functools
 from collections import deque
 
-import random
-import functools
-
-
-current_song = {}   # {guild_id: {title, url}}
-main_loop = asyncio.get_event_loop()
+# yt-dlp와 FFmpeg 옵션 설정
+YDL_OPTS = {
+    'format': 'bestaudio[ext=m4a]/bestaudio/best',
+    'quiet': True,
+    'noplaylist': True,
+}
+FFMPEG_OPTS = {
+    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 8M -probesize 32M',
+    'options': '-vn',
+}
 QUEUE_LIMIT = 30
 
-guild_queues = {}  # {guild_id: deque([...])}
-guild_playing = {} # {guild_id: bool}
-autoplay_enabled = {}  # {guild_id: bool}  # 자동재생 on/off
+class GuildState:
+    """각 서버(길드)의 상태를 관리하는 클래스"""
+    def __init__(self, loop):
+        self.loop = loop
+        self.queue = deque()
+        self.current_song = None
+        self.is_playing = False
+        self.autoplay_enabled = True # 자동재생 기본값
 
-def get_guild_queue(guild_id):
-    """해당 길드의 큐를 반환하며, 없으면 초기화합니다."""
-    if guild_id not in guild_queues:
-        guild_queues[guild_id] = deque()
-        guild_playing[guild_id] = False
-    return guild_queues[guild_id]
+class MusicCog(discord.Cog):
+    """음악 기능 관련 모든 로직을 담는 Cog 클래스"""
+    def __init__(self, bot):
+        self.bot = bot
+        self.states = {} # {guild_id: GuildState}
 
-def is_queue_empty(guild_id):
-    return not guild_queues.get(guild_id)
+    def _get_state(self, guild_id) -> GuildState:
+        """해당 길드의 상태 객체를 가져오거나 새로 생성합니다."""
+        if guild_id not in self.states:
+            self.states[guild_id] = GuildState(self.bot.loop)
+        return self.states[guild_id]
 
-def clear_guild_queue(guild_id):
-    q = guild_queues.get(guild_id)
-    if q:
-        q.clear()
+    async def _prefetch_next_song(self, guild_id):
+        """큐의 다음 곡을 미리 준비(프리페칭)합니다."""
+        state = self._get_state(guild_id)
+        if not state.queue:
+            return
 
-def remove_from_queue(guild_id, position):
-    q = guild_queues.get(guild_id)
-    if q and 1 <= position <= len(q):
-        removed = q[position-1]['title']
-        del q[position-1]
-        return removed
-    return None
+        next_song = state.queue[0]
+        if next_song.get('prefetched', False):
+            return
 
-def register_music_commands(bot):
-    # === 음악 명령어: 도움말 ===
-    @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Show all music commands and usage.")
-    async def help(ctx):
+        print(f"[prefetch] Starting for: {next_song['title']}", flush=True)
+        try:
+            with youtube_dl.YoutubeDL(YDL_OPTS) as ydl:
+                info = await self.bot.loop.run_in_executor(None, functools.partial(ydl.extract_info, next_song['webpage_url'], download=False))
+            
+            audio_formats = sorted([f for f in info['formats'] if f.get('acodec') != 'none' and f.get('url')], key=lambda x: 0 if x.get('abr') is None else x.get('abr'), reverse=True)
+
+            if audio_formats:
+                stream_url = audio_formats[0]['url']
+                state.queue[0]['url'] = stream_url
+                state.queue[0]['prefetched'] = True
+                print(f"[prefetch] Success for: {next_song['title']}", flush=True)
+        except Exception as e:
+            print(f"[prefetch] Failed for {next_song['title']}: {e}", flush=True)
+
+    async def _play_next(self, ctx):
+        """
+        큐의 다음 곡을 재생합니다. 큐가 비었으면 자동재생을 시도합니다.
+        이 함수는 모든 재생 로직의 중심입니다.
+        """
+        guild_id = ctx.guild.id
+        state = self._get_state(guild_id)
+
+        # 1. 큐가 비어있는 경우, 자동재생을 시도합니다.
+        if not state.queue:
+            print(f"[_play_next] Queue is empty.", flush=True)
+            if state.autoplay_enabled and state.current_song:
+                last_url = state.current_song['webpage_url']
+                print(f"[autoplay] Triggered. Fetching recommendations based on: {last_url}", flush=True)
+                import re
+                match = re.search(r"v=([\w-]+)", last_url)
+                video_id = match.group(1) if match else None
+                if video_id:
+                    try:
+                        # utils.py의 함수를 직접 호출
+                        related_videos = get_related_videos(video_id, max_results=3)
+                        if related_videos:
+                            for video_info in related_videos:
+                                if isinstance(video_info, dict) and video_info.get('id'):
+                                    video_id = video_info.get('id')
+                                    title = video_info.get('title', 'Unknown Title')
+                                    url = f"https://www.youtube.com/watch?v={video_id}"
+                                    state.queue.append({'url': url, 'title': title, 'ctx': ctx, 'webpage_url': url, 'prefetched': False, 'added_by': 'autoplay'})
+                            
+                            if state.queue:
+                                print(f"[autoplay] Added {len(related_videos)} songs. Restarting _play_next.", flush=True)
+                                await self._play_next(ctx)
+                                return
+                        else:
+                            await ctx.channel.send('Autoplay: 추천곡을 찾지 못했습니다.')
+                    except Exception as e:
+                        print(f"[autoplay] Exception: {e}", flush=True)
+                        await ctx.channel.send(f'Autoplay: 추천곡 재생 중 오류가 발생했습니다: {e}')
+            
+            print(f"[_play_next] Stopping playback.", flush=True)
+            state.is_playing = False
+            state.current_song = None
+            return
+
+        # 2. 큐에 곡이 있으면, 다음 곡을 재생합니다.
+        next_song = state.queue.popleft()
+        voice_client = ctx.voice_client
+        if not voice_client or not voice_client.is_connected():
+            state.is_playing = False
+            return
+
+        play_url = next_song.get('url')
+        if not next_song.get('prefetched', False):
+            print(f"[_play_next] Song not prefetched. Fetching stream URL for: {next_song['title']}", flush=True)
+            try:
+                with youtube_dl.YoutubeDL(YDL_OPTS) as ydl:
+                    info = await self.bot.loop.run_in_executor(None, functools.partial(ydl.extract_info, next_song['webpage_url'], download=False))
+                audio_formats = sorted([f for f in info['formats'] if f.get('acodec') != 'none' and f.get('url')], key=lambda x: 0 if x.get('abr') is None else x.get('abr'), reverse=True)
+                if not audio_formats:
+                    raise ValueError("No suitable audio stream found")
+                play_url = audio_formats[0]['url']
+                print(f"[_play_next] Stream URL fetched successfully.", flush=True)
+            except Exception as e:
+                print(f"[_play_next] Failed to fetch stream URL for {next_song['title']}: {e}", flush=True)
+                await ctx.channel.send(f"'{next_song['title']}'을(를) 재생할 수 없어 건너뜁니다.")
+                await self._play_next(ctx)
+                return
+
+        state.is_playing = True
+        state.current_song = next_song
+        
+        def after_playing(error):
+            if error:
+                print(f"[_play_next:after] Error playing {next_song['title']}: {error}", flush=True)
+            # self.bot.loop를 사용하여 코루틴을 스레드 안전하게 실행
+            self.bot.loop.create_task(self._play_next(ctx))
+
+        try:
+            source = discord.FFmpegPCMAudio(play_url, **FFMPEG_OPTS)
+            voice_client.play(source, after=after_playing)
+            await ctx.channel.send(f'Now playing: {next_song["title"]}\nURL: {next_song["webpage_url"]}')
+
+            # 3. 재생 시작 후, 다음 곡이 있다면 프리페칭합니다.
+            if state.queue:
+                self.bot.loop.create_task(self._prefetch_next_song(guild_id))
+
+        except Exception as e:
+            print(f"[_play_next] Critical error trying to play {next_song['title']}: {e}", flush=True)
+            await ctx.channel.send(f"''{next_song["title"]}' 재생 중 심각한 오류가 발생했습니다.")
+            await self._play_next(ctx)
+
+    # --- 사용자 명령어 ---
+
+    @discord.slash_command(description="음악봇 명령어 도움말을 보여줍니다.")
+    async def help(self, ctx):
         help_text = (
             "**[음악봇 명령어 안내]**\n"
-            "/play <url> : 유튜브 곡을 큐에 추가 및 재생\n"
+            "/play <url 또는 검색어> : 노래를 큐에 추가 및 재생\n"
             "/playlist <url> : 유튜브 플레이리스트 전체 추가\n"
-            "/repeat : 현재 곡 반복\n"
-            "/shuffle : 큐 셔플\n"
             "/skip : 현재 곡 스킵\n"
             "/pause : 곡 일시정지\n"
             "/resume : 곡 재개\n"
@@ -62,442 +171,227 @@ def register_music_commands(bot):
             "/leave : 음성 채널에서 봇 퇴장\n"
             "/autoplay [on/off] : 자동재생 기능 켜기/끄기\n"
         )
-        await ctx.respond(help_text)
+        await ctx.respond(help_text, ephemeral=True)
 
-    # === 음악 명령어: 자동재생 on/off ===
-    @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Toggle autoplay (YouTube 추천곡 자동재생) on/off.")
-    async def autoplay(ctx, mode: str):
-        guild_id = ctx.guild.id
-        mode = mode.lower()
-        if mode == "on":
-            autoplay_enabled[guild_id] = True
-            await ctx.respond("Autoplay가 켜졌습니다. (대기열이 비면 유튜브 추천곡이 자동 재생됩니다)")
-        elif mode == "off":
-            autoplay_enabled[guild_id] = False
-            await ctx.respond("Autoplay가 꺼졌습니다.")
-        else:
-            await ctx.respond("사용법: /autoplay on 또는 /autoplay off")
-
-    # ...existing code...
-
-    # play_next를 bot에 등록
-    bot.play_next = play_next
-
-    # === 음악 명령어: 플레이리스트 추가 ===
-    @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Play all videos in a YouTube playlist.")
-    async def playlist(ctx, url: str):
-        guild_id = ctx.guild.id
+    @discord.slash_command(description="노래를 재생하거나 큐에 추가합니다.")
+    async def play(self, ctx, query: str):
         await ctx.defer()
+        state = self._get_state(ctx.guild.id)
+
+        # 사용자 우선 로직: 자동재생으로 추가된 곡들을 큐에서 제거합니다.
+        if any(song.get('added_by') == 'autoplay' for song in state.queue):
+            state.queue = deque(song for song in state.queue if song.get('added_by') != 'autoplay')
+            print(f"[play] User interrupted autoplay. Clearing autoplay songs from queue.", flush=True)
+            await ctx.channel.send("자동재생 목록을 지웠습니다. 요청하신 곡을 우선 재생합니다.", delete_after=10)
+
         try:
-            print(f"[playlist] Command received: guild={guild_id}, url={url}", flush=True)
-            if guild_id not in guild_queues:
-                guild_queues[guild_id] = deque()
-                guild_playing[guild_id] = False
-                print(f"[playlist] Initialized queue and playing state for guild {guild_id}", flush=True)
+            if len(state.queue) >= QUEUE_LIMIT:
+                await ctx.followup.send(f'큐가 가득 찼습니다! (최대 {QUEUE_LIMIT}곡)')
+                return
+
             if not ctx.voice_client:
                 if ctx.author.voice:
-                    channel = ctx.author.voice.channel
-                    try:
-                        print(f"[playlist] Connecting to voice channel: {channel}", flush=True)
-                        await channel.connect()
-                        print(f"[playlist] Connected to voice channel: {channel}", flush=True)
-                    except Exception as e:
-                        print(f"[playlist] Failed to connect to voice channel: {e}", flush=True)
-                        await ctx.followup.send(f'Failed to connect to voice channel: {e}')
-                        return
+                    await ctx.author.voice.channel.connect()
                 else:
-                    print(f"[playlist] Author not in voice channel", flush=True)
-                    await ctx.followup.send("You need to be in a voice channel to play music.")
+                    await ctx.followup.send("음성 채널에 먼저 참여해주세요.")
                     return
-            # Use 'extract_flat' to get playlist entries quickly without full extraction.
-            ydl_opts_fast = {
-                'quiet': True,
-                'noplaylist': False,
-                'extract_flat': True,
-            }
+            
+            # 검색어 지원
+            search_query = f"ytsearch:{query}" if not query.startswith('http') else query
+            
+            with youtube_dl.YoutubeDL({'quiet': True, 'noplaylist': True, 'default_search': 'ytsearch'}) as ydl:
+                info = await self.bot.loop.run_in_executor(None, functools.partial(ydl.extract_info, search_query, download=False))
+            
+            # 검색 결과가 리스트일 경우 첫 번째 항목 사용
+            if 'entries' in info:
+                info = info['entries'][0]
 
-            async def fetch_playlist_info():
-                loop = asyncio.get_event_loop()
-                print(f"[playlist] Starting fast yt-dlp extraction for url: {url}", flush=True)
-                with youtube_dl.YoutubeDL(ydl_opts_fast) as ydl:
-                    info = await loop.run_in_executor(None, functools.partial(ydl.extract_info, url, download=False))
-                print(f"[playlist] Fast yt-dlp extraction finished for url: {url}", flush=True)
-                return info
-            try:
-                info = await asyncio.wait_for(fetch_playlist_info(), timeout=30)
-                entries = info.get('entries')
-                if not entries:
-                    print(f"[playlist] No playlist entries found for url: {url}", flush=True)
-                    await ctx.followup.send('No playlist found for this URL.')
-                    return
-                
-                added_count = 0
-                for entry in entries:
-                    if not entry or not entry.get('id'):
-                        continue
-                    
-                    title = entry.get('title', 'Unknown Title')
-                    # Construct the URL from the ID, as 'webpage_url' might be missing.
-                    webpage_url = f"https://www.youtube.com/watch?v={entry['id']}"
-                    
-                    if len(guild_queues[guild_id]) < QUEUE_LIMIT:
-                        # Add the original webpage_url to the queue. FFmpeg will handle it.
-                        guild_queues[guild_id].append({'url': webpage_url, 'title': title, 'ctx': ctx, 'webpage_url': webpage_url})
-                        added_count += 1
+            title = info.get('title', 'Unknown Title')
+            webpage_url = info.get('webpage_url', query)
 
-                print(f"[playlist] Added {added_count} videos to queue (guild={guild_id})", flush=True)
-                await ctx.followup.send(f'Added {added_count} videos to queue.')
-                
-                if not guild_playing[guild_id] and added_count > 0:
-                    print(f"[playlist] Starting playback for guild {guild_id}", flush=True)
-                    await play_next(ctx)
-            except asyncio.TimeoutError:
-                print(f"[playlist] Timeout during yt-dlp playlist extraction for url: {url}", flush=True)
-                await ctx.followup.send('Timeout: 유튜브 플레이리스트 정보 추출이 30초 내에 완료되지 않았습니다.')
-                return
-            except Exception as e:
-                print(f"[playlist] Exception during yt-dlp playlist extraction: {e}", flush=True)
-                await ctx.followup.send(f'Failed to fetch playlist: {e}')
-                return
+            state.queue.append({'url': webpage_url, 'title': title, 'ctx': ctx, 'webpage_url': webpage_url, 'added_by': 'user', 'prefetched': False})
+            await ctx.followup.send(f'큐에 추가됨: {title}')
+            
+            if not state.is_playing:
+                await self._play_next(ctx)
+
         except Exception as e:
-            print(f"[playlist] Unexpected error: {e}", flush=True)
-            await ctx.followup.send(f'Unexpected error: {e}')
+            print(f"[play] Unexpected error: {e}", flush=True)
+            await ctx.followup.send(f'오류가 발생했습니다: {e}')
 
-    # === 음악 명령어: 현재 곡 반복 ===
-    @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Repeat the current song.")
-    async def repeat(ctx):
-        guild_id = ctx.guild.id
-        song = current_song.get(guild_id)
-        if song:
-            guild_queues[guild_id].appendleft({'url': song['url'], 'title': song['title'], 'ctx': ctx})
-            await ctx.respond(f'Repeated: {song["title"]}')
-        else:
-            await ctx.respond('No song is currently playing.')
+    @discord.slash_command(description="유튜브 플레이리스트를 큐에 추가합니다.")
+    async def playlist(self, ctx, url: str):
+        await ctx.defer()
+        state = self._get_state(ctx.guild.id)
 
-    # === 음악 명령어: 큐 셔플 ===
-    @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Shuffle the music queue.")
-    async def shuffle(ctx):
-        guild_id = ctx.guild.id
-        q = guild_queues.get(guild_id, deque())
-        if len(q) < 2:
-            await ctx.respond('Not enough songs in queue to shuffle.')
-            return
-        random.shuffle(q)
-        await ctx.respond('Queue shuffled.')
+        if any(song.get('added_by') == 'autoplay' for song in state.queue):
+            state.queue = deque(song for song in state.queue if song.get('added_by') != 'autoplay')
+            print(f"[playlist] User interrupted autoplay. Clearing autoplay songs.", flush=True)
+            await ctx.channel.send("자동재생 목록을 지웠습니다. 요청하신 재생목록을 우선 추가합니다.", delete_after=10)
 
-    # === 음악 명령어: 곡 스킵 ===
-    @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Skip the current song.")
-    async def skip(ctx):
+        try:
+            if not ctx.voice_client:
+                if ctx.author.voice:
+                    await ctx.author.voice.channel.connect()
+                else:
+                    await ctx.followup.send("음성 채널에 먼저 참여해주세요.")
+                    return
+
+            with youtube_dl.YoutubeDL({'quiet': True, 'noplaylist': False, 'extract_flat': True}) as ydl:
+                info = await self.bot.loop.run_in_executor(None, functools.partial(ydl.extract_info, url, download=False))
+            
+            entries = info.get('entries')
+            if not entries:
+                await ctx.followup.send('플레이리스트를 찾을 수 없거나, 비어있습니다.')
+                return
+            
+            added_count = 0
+            for entry in entries:
+                if not entry or not entry.get('id'):
+                    continue
+                if len(state.queue) >= QUEUE_LIMIT:
+                    break
+                title = entry.get('title', 'Unknown Title')
+                webpage_url = f"https://www.youtube.com/watch?v={entry['id']}"
+                state.queue.append({'url': webpage_url, 'title': title, 'ctx': ctx, 'webpage_url': webpage_url, 'added_by': 'user', 'prefetched': False})
+                added_count += 1
+
+            await ctx.followup.send(f'{added_count}개의 노래를 큐에 추가했습니다.')
+            
+            if not state.is_playing and added_count > 0:
+                await self._play_next(ctx)
+        except Exception as e:
+            print(f"[playlist] Exception: {e}", flush=True)
+            await ctx.followup.send(f'플레이리스트를 가져오는 중 오류가 발생했습니다: {e}')
+
+    @discord.slash_command(description="현재 재생 중인 노래를 건너뜁니다.")
+    async def skip(self, ctx):
         voice_client = ctx.voice_client
         if voice_client and voice_client.is_playing():
             voice_client.stop()
-            await ctx.respond('Skipped current song.')
-            # 다음 곡 재생은 after_playing 콜백이 자동으로 처리하므로, 여기서 직접 호출하지 않습니다.
+            await ctx.respond('노래를 건너뛰었습니다.', ephemeral=True)
         else:
-            await ctx.respond('Nothing is playing to skip.')
+            await ctx.respond('재생 중인 노래가 없습니다.', ephemeral=True)
 
-    # === 음악 명령어: 곡 일시정지 ===
-    @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Pause the current song.")
-    async def pause(ctx):
-        voice_client = ctx.voice_client
-        if voice_client and voice_client.is_playing():
-            voice_client.pause()
-            await ctx.respond('Playback paused.')
+    @discord.slash_command(description="재생을 일시정지합니다.")
+    async def pause(self, ctx):
+        if ctx.voice_client and ctx.voice_client.is_playing():
+            ctx.voice_client.pause()
+            await ctx.respond("재생을 일시정지했습니다.", ephemeral=True)
         else:
-            await ctx.respond('Nothing is playing right now.')
+            await ctx.respond("재생 중인 노래가 없습니다.", ephemeral=True)
 
-    # === 음악 명령어: 곡 재개 ===
-    @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Resume the paused song.")
-    async def resume(ctx):
-        voice_client = ctx.voice_client
-        if voice_client and voice_client.is_paused():
-            voice_client.resume()
-            await ctx.respond('Playback resumed.')
+    @discord.slash_command(description="일시정지된 재생을 재개합니다.")
+    async def resume(self, ctx):
+        if ctx.voice_client and ctx.voice_client.is_paused():
+            ctx.voice_client.resume()
+            await ctx.respond("재생을 재개했습니다.", ephemeral=True)
         else:
-            await ctx.respond('Nothing is paused right now.')
+            await ctx.respond("일시정지된 노래가 없습니다.", ephemeral=True)
 
-    # === 음악 명령어: 큐 보기 ===
-    @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Show the current music queue.")
-    async def queue(ctx):
-        guild_id = ctx.guild.id
-        q = get_guild_queue(guild_id)
-        if not q:
-            await ctx.respond('Queue is empty.')
-        else:
-            msg = '\n'.join([f'{i+1}. {item["title"]}' for i, item in enumerate(q)])
-            await ctx.respond(f'Current queue:\n{msg}')
-
-    # === 음악 명령어: 큐에서 곡 제거 ===
-    @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Remove a song from the queue by its position.")
-    async def remove(ctx, position: int):
-        guild_id = ctx.guild.id
-        removed = remove_from_queue(guild_id, position)
-        if removed:
-            await ctx.respond(f'Removed from queue: {removed}')
-        else:
-            await ctx.respond('Queue is empty or invalid position.')
-
-    # === 음악 명령어: 큐 전체 비우기 ===
-    @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Clear the entire music queue.")
-    async def clear(ctx):
-        guild_id = ctx.guild.id
-        if is_queue_empty(guild_id):
-            await ctx.respond('Queue is already empty.')
-        else:
-            clear_guild_queue(guild_id)
-            await ctx.respond('Queue cleared.')
-
-    # === 음악 명령어: 현재 재생 중인 곡 정보 ===
-    @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Show info about the currently playing song.")
-    async def nowplaying(ctx):
-        guild_id = ctx.guild.id
-        song = current_song.get(guild_id)
-        if song:
-            await ctx.respond(f'Now playing: {song["title"]}\nURL: {song["url"]}')
-        else:
-            await ctx.respond('No song is currently playing.')
-
-    # === 음악 명령어: 음성 채널에서 봇 퇴장 ===
-    @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Disconnect the bot from the voice channel.")
-    async def leave(ctx):
-        global autoplay_state
-        voice_client = ctx.voice_client
-        if voice_client:
-            await voice_client.disconnect()
-            guild_id = ctx.guild.id
-            if guild_id in guild_playing:
-                guild_playing[guild_id] = False
-            if guild_id in guild_queues:
-                guild_queues[guild_id].clear()
-            autoplay_state[guild_id] = False # 자동재생 상태 초기화
-            await ctx.respond("Bot has left the voice channel and cleared the queue.")
-        else:
-            await ctx.respond("Bot is not connected to any voice channel.")
-
-    # === 음악 명령어: 유튜브 단일 곡 재생 ===
-    @bot.slash_command(guild_id=[1345392235264348170, 540157160961867796, 326024303948857356], description="Play a song from YouTube.")
-    async def play(ctx, url: str):
-        guild_id = ctx.guild.id
-        await ctx.defer()
-        try:
-            print(f"[play] Command received: guild={guild_id}, url={url}", flush=True)
-            if guild_id not in guild_queues:
-                guild_queues[guild_id] = deque()
-                guild_playing[guild_id] = False
-                print(f"[play] Initialized queue and playing state for guild {guild_id}", flush=True)
-            # queue 길이 제한 체크
-            if len(guild_queues[guild_id]) >= QUEUE_LIMIT:
-                print(f"[play] Queue full for guild {guild_id}", flush=True)
-                await ctx.followup.send(f'Queue is full! (최대 {QUEUE_LIMIT}곡까지 가능)')
-                return
-            if not ctx.voice_client:
-                if ctx.author.voice:
-                    channel = ctx.author.voice.channel
-                    try:
-                        print(f"[play] Connecting to voice channel: {channel}", flush=True)
-                        await channel.connect()
-                        print(f"[play] Connected to voice channel: {channel}", flush=True)
-                    except Exception as e:
-                        print(f"[play] Failed to connect to voice channel: {e}", flush=True)
-                        await ctx.followup.send(f'Failed to connect to voice channel: {e}')
-                        return
-                else:
-                    print(f"[play] Author not in voice channel", flush=True)
-                    await ctx.followup.send("You need to be in a voice channel to play music.")
-                    return
-            ydl_opts = {
-                'format': 'bestaudio',
-                'quiet': False,
-                'noplaylist': True,
-            }
-            # ...existing code...
-            async def fetch_info():
-                loop = asyncio.get_event_loop()
-                print(f"[play] Starting yt-dlp extraction for url: {url}", flush=True)
-                with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-                    info = await loop.run_in_executor(None, functools.partial(ydl.extract_info, url, False))
-                print(f"[play] yt-dlp extraction finished for url: {url}", flush=True)
-                return info
-            try:
-                info = await asyncio.wait_for(fetch_info(), timeout=15)
-                print(f"[play] yt-dlp info received: title={info.get('title', 'Unknown')}", flush=True)
-                audio_formats = sorted(
-                    [f for f in info['formats'] if f.get('acodec') != 'none' and f.get('url')],
-                    key=lambda x: 0 if x.get('abr') is None else x.get('abr'),
-                    reverse=True
-                )
-                if not audio_formats:
-                    print(f"[play] No audio stream found for url: {url}", flush=True)
-                    await ctx.followup.send('No audio stream found for this video.')
-                    return
-                stream_url = audio_formats[0]['url']
-                title = info.get('title', 'Unknown Title')
-                webpage_url = info.get('webpage_url', url)
-                guild_queues[guild_id].append({'url': stream_url, 'title': title, 'ctx': ctx, 'webpage_url': webpage_url})
-                print(f"[play] Added to queue: {title} (guild={guild_id})", flush=True)
-                await ctx.followup.send(f'Added to queue: {title}')
-                if not guild_playing[guild_id]:
-                    print(f"[play] Starting playback for guild {guild_id}", flush=True)
-                    await play_next(ctx)
-            except asyncio.TimeoutError:
-                print(f"[play] Timeout during yt-dlp extraction for url: {url}", flush=True)
-                await ctx.followup.send('Timeout: 유튜브 정보 추출이 15초 내에 완료되지 않았습니다.')
-                return
-            except Exception as e:
-                print(f"[play] Exception during yt-dlp extraction: {e}", flush=True)
-                await ctx.followup.send(f'Failed to fetch audio: {e}')
-                return
-        except Exception as e:
-            print(f"[play] Unexpected error: {e}", flush=True)
-            await ctx.followup.send(f'Unexpected error: {e}')
-
-
-# === 백그라운드 프리페칭 함수 ===
-async def prefetch_next_song(guild_id):
-    q = guild_queues.get(guild_id)
-    if not q:
-        return
-
-    next_song = q[0]
-    if next_song.get('prefetched', False):
-        return
-
-    print(f"[prefetch] Starting for: {next_song['title']}", flush=True)
-    try:
-        ydl_opts = {
-            'format': 'bestaudio',
-            'quiet': True,
-            'noplaylist': True,
-        }
-        loop = asyncio.get_event_loop()
-        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-            info = await loop.run_in_executor(None, functools.partial(ydl.extract_info, next_song['webpage_url'], download=False))
-        
-        audio_formats = sorted(
-            [f for f in info['formats'] if f.get('acodec') != 'none' and f.get('url')],
-            key=lambda x: 0 if x.get('abr') is None else x.get('abr'),
-            reverse=True
-        )
-
-        if audio_formats:
-            stream_url = audio_formats[0]['url']
-            q[0]['url'] = stream_url
-            q[0]['prefetched'] = True
-            print(f"[prefetch] Success for: {next_song['title']}", flush=True)
-        else:
-            print(f"[prefetch] No audio stream found for: {next_song['title']}", flush=True)
-
-    except Exception as e:
-        print(f"[prefetch] Failed for {next_song['title']}: {e}", flush=True)
-
-
-# === 최종 재생 함수 (단순하고 안정적인 로직) ===
-async def play_next(ctx):
-    guild_id = ctx.guild.id
-    global autoplay_state # 전역 변수 사용 명시
-    try:
-        # 1. 큐가 비어있는 경우, 자동재생을 시도합니다.
-        if not guild_queues.get(guild_id):
-            print(f"[play_next] Queue is empty.", flush=True)
-            if autoplay_enabled.get(guild_id, True) and current_song.get(guild_id):
-                last_url = current_song[guild_id]['url']
-                print(f"[autoplay] Triggered. Fetching recommendations based on: {last_url}", flush=True)
-                import re
-                match = re.search(r"v=([\w-]+)", last_url)
-                video_id = match.group(1) if match else None
-                if video_id:
-                    try:
-                        related_videos = get_related_videos(video_id, max_results=3)
-                        if related_videos:
-                            for video_info in related_videos:
-                                if isinstance(video_info, dict) and video_info.get('id'):
-                                    video_id = video_info.get('id')
-                                    title = video_info.get('title', 'Unknown Title')
-                                    url = f"https://www.youtube.com/watch?v={video_id}"
-                                    guild_queues[guild_id].append({'url': url, 'title': title, 'ctx': ctx, 'webpage_url': url, 'prefetched': False, 'added_by': 'autoplay'})
-                            
-                            if guild_queues[guild_id]:
-                                print(f"[autoplay] Added {len(related_videos)} songs. Restarting play_next.", flush=True)
-                                await play_next(ctx)
-                                return
-                        else:
-                            await ctx.channel.send('Autoplay: 추천곡을 찾지 못했습니다.')
-                    except Exception as e:
-                        print(f"[autoplay] Exception: {e}", flush=True)
-                        await ctx.channel.send(f'Autoplay: 추천곡 재생 중 오류가 발생했습니다: {e}')
-            
-            # 자동재생이 꺼져있거나, 실패했으면 최종적으로 재생을 멈춥니다.
-            print(f"[play_next] Stopping playback.", flush=True)
-            guild_playing[guild_id] = False
-            current_song[guild_id] = None
+    @discord.slash_command(description="재생 대기열을 보여줍니다.")
+    async def queue(self, ctx):
+        state = self._get_state(ctx.guild.id)
+        if not state.queue:
+            await ctx.respond('큐가 비어있습니다.', ephemeral=True)
             return
 
-        # 2. 큐에 곡이 있으면, 다음 곡을 재생합니다.
-        next_song = guild_queues[guild_id].popleft()
-        voice_client = ctx.voice_client
-        if not voice_client or not voice_client.is_connected():
-            guild_playing[guild_id] = False
+        msg_lines = []
+        for i, item in enumerate(state.queue, 1):
+            line = f'{i}. {item["title"]}'
+            if item.get('added_by') == 'autoplay':
+                line += " (추천)"
+            msg_lines.append(line)
+            if i >= 15:
+                msg_lines.append(f"... 외 {len(state.queue) - 15}곡")
+                break
+        
+        await ctx.respond(f'**현재 대기열:**\n' + '\n'.join(msg_lines))
+
+    @discord.slash_command(description="대기열에서 특정 노래를 제거합니다.")
+    async def remove(self, ctx, position: int):
+        state = self._get_state(ctx.guild.id)
+        if not state.queue or not (1 <= position <= len(state.queue)):
+            await ctx.respond("잘못된 번호입니다.", ephemeral=True)
             return
-
-        play_url = next_song.get('url')
-        if not next_song.get('prefetched', False):
-            print(f"[play_next] Song not prefetched. Fetching stream URL for: {next_song['title']}", flush=True)
-            try:
-                ydl_opts = {'format': 'bestaudio[ext=m4a]/bestaudio/best', 'quiet': True, 'noplaylist': True}
-                loop = asyncio.get_event_loop()
-                with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-                    info = await loop.run_in_executor(None, functools.partial(ydl.extract_info, next_song['webpage_url'], download=False))
-                audio_formats = sorted([f for f in info['formats'] if f.get('acodec') != 'none' and f.get('url')], key=lambda x: 0 if x.get('abr') is None else x.get('abr'), reverse=True)
-                if not audio_formats:
-                    raise ValueError("No suitable audio stream found")
-                play_url = audio_formats[0]['url']
-                print(f"[play_next] Stream URL fetched successfully.", flush=True)
-            except Exception as e:
-                print(f"[play_next] Failed to fetch stream URL for {next_song['title']}: {e}", flush=True)
-                await ctx.channel.send(f"'{next_song['title']}'을(를) 재생할 수 없어 건너뜁니다.")
-                await play_next(ctx)
-                return
-
-        guild_playing[guild_id] = True
-        display_url = next_song.get('webpage_url', next_song['url'])
-        current_song[guild_id] = {'title': next_song['title'], 'url': display_url}
         
-        def after_playing(error):
-            if error:
-                print(f"[play_next:after] Error playing {next_song['title']}: {error}", flush=True)
-            coro = play_next(next_song['ctx'])
-            asyncio.run_coroutine_threadsafe(coro, main_loop)
+        removed = state.queue[position-1]
+        del state.queue[position-1]
+        await ctx.respond(f'큐에서 제거됨: {removed["title"]}')
+
+    @discord.slash_command(description="대기열을 모두 비웁니다.")
+    async def clear(self, ctx):
+        state = self._get_state(ctx.guild.id)
+        if state.queue:
+            state.queue.clear()
+            await ctx.respond("큐를 모두 비웠습니다.")
+        else:
+            await ctx.respond("큐가 이미 비어있습니다.", ephemeral=True)
+
+    @discord.slash_command(description="현재 재생 중인 노래 정보를 보여줍니다.")
+    async def nowplaying(self, ctx):
+        state = self._get_state(ctx.guild.id)
+        if state.current_song:
+            await ctx.respond(f'현재 재생 중: {state.current_song["title"]}\nURL: {state.current_song["webpage_url"]}')
+        else:
+            await ctx.respond("재생 중인 노래가 없습니다.", ephemeral=True)
+
+    @discord.slash_command(description="음성 채널에서 나갑니다.")
+    async def leave(self, ctx):
+        state = self._get_state(ctx.guild.id)
+        if ctx.voice_client:
+            await ctx.voice_client.disconnect()
+            state.is_playing = False
+            state.queue.clear()
+            await ctx.respond("음성 채널을 나갔습니다.")
+        else:
+            await ctx.respond("음성 채널에 연결되어 있지 않습니다.", ephemeral=True)
+
+    @discord.slash_command(description="자동재생 기능을 켜거나 끕니다.")
+    async def autoplay(self, ctx, mode: str):
+        state = self._get_state(ctx.guild.id)
+        mode = mode.lower()
+        if mode == "on":
+            state.autoplay_enabled = True
+            await ctx.respond("자동재생이 켜졌습니다.")
+        elif mode == "off":
+            state.autoplay_enabled = False
+            await ctx.respond("자동재생이 꺼졌습니다.")
+        else:
+            await ctx.respond("사용법: /autoplay on 또는 /autoplay off", ephemeral=True)
+
+# utils.py의 함수를 여기에 포함하거나, 별도 파일로 유지합니다.
+from googleapiclient.discovery import build
+import os
+
+def get_related_videos(video_id, max_results=5):
+    try:
+        YOUTUBE_API_KEY = os.getenv('YOUTUBE_API_KEY')
+        if not YOUTUBE_API_KEY:
+            print("[utils] YOUTUBE_API_KEY is not set.", flush=True)
+            return []
         
-        try:
-            source = discord.FFmpegPCMAudio(play_url, before_options='-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 8M -probesize 32M', options='-vn')
-            voice_client.play(source, after=after_playing)
-            await ctx.channel.send(f'Now playing: {next_song["title"]}\nURL: {display_url}')
-
-            # 3. 재생 시작 후, 다음 곡이 있다면 프리페칭합니다.
-            if guild_queues.get(guild_id):
-                asyncio.create_task(prefetch_next_song(guild_id))
-
-        except Exception as e:
-            print(f"[play_next] Critical error trying to play {next_song['title']}: {e}", flush=True)
-            await ctx.channel.send(f"'{next_song['title']}' 재생 중 심각한 오류가 발생했습니다.")
-            await play_next(ctx)
-
+        youtube = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
+        
+        response = youtube.search().list(
+            part='snippet',
+            relatedToVideoId=video_id,
+            type='video',
+            maxResults=max_results
+        ).execute()
+        
+        return [
+            {'title': item['snippet']['title'], 'id': item['id']['videoId']}
+            for item in response.get('items', [])
+        ]
     except Exception as e:
-        print(f"[play_next] Unexpected error in play_next: {e}", flush=True)
-        guild_playing[guild_id] = False
+        print(f"[utils] Failed to get related videos: {e}", flush=True)
+        # yt-dlp를 대체 수단으로 사용
+        with youtube_dl.YoutubeDL({'quiet': True, 'extract_flat': True}) as ydl:
+            mix_url = f"https://www.youtube.com/watch?v={video_id}&list=RD{video_id}"
+            playlist_info = ydl.extract_info(mix_url, download=False)
+            entries = playlist_info.get('entries', [])
+            return [entry for entry in entries if entry and entry.get('id') and entry.get('id') != video_id][:max_results]
 
-def register_music_events(bot):
-    @bot.event
-    async def on_voice_state_update(member, before, after):
-        if member.guild.voice_client and member.guild.voice_client.channel:
-            channel = member.guild.voice_client.channel
-            human_members = [m for m in channel.members if not m.bot]
-            if len(human_members) == 0:
-                await member.guild.voice_client.disconnect()
-                guild_id = member.guild.id
-                if guild_id in guild_playing:
-                    guild_playing[guild_id] = False
-                if guild_id in guild_queues:
-                    for entry in guild_queues[guild_id]:
-                        webpage_url = entry.get('webpage_url', entry['url'])
-                guild_queues[guild_id].clear()
+def setup(bot):
+    bot.add_cog(MusicCog(bot))

@@ -13,9 +13,7 @@ bot = discord.Bot()
 async def on_ready():
     print(f'Logged in as {bot.user}')
 
-# 음악 기능 import
-from music import register_music_commands, register_music_events
-register_music_commands(bot)
-register_music_events(bot)
+from music import MusicCog
+bot.add_cog(MusicCog(bot))
 
 bot.run(DISCORD_TOKEN)
