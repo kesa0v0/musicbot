@@ -192,8 +192,7 @@ def register_music_commands(bot):
         if voice_client and voice_client.is_playing():
             voice_client.stop()
             await ctx.respond('Skipped current song.')
-            # 다음 곡 자동 재생
-            await bot.play_next(ctx)
+            # 다음 곡 재생은 after_playing 콜백이 자동으로 처리하므로, 여기서 직접 호출하지 않습니다.
         else:
             await ctx.respond('Nothing is playing to skip.')
 
