@@ -3,6 +3,3 @@ py-cord[voice]
 py-cord[speed]
 pynacl
 yt-dlp
-google-api-python-client
-google-auth-oauthlib
-google-auth-httplib2

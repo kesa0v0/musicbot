@@ -3,6 +3,8 @@ import asyncio
 import yt_dlp as youtube_dl
 import functools
 from collections import deque
+from utils import get_related_videos
+
 
 # yt-dlp와 FFmpeg 옵션 설정
 YDL_OPTS = {
@@ -359,38 +361,6 @@ class MusicCog(discord.Cog):
             await ctx.respond("자동재생이 꺼졌습니다.")
         else:
             await ctx.respond("사용법: /autoplay on 또는 /autoplay off", ephemeral=True)
-
-from googleapiclient.discovery import build
-import os
-
-def get_related_videos(video_id, max_results=5):
-    try:
-        YOUTUBE_API_KEY = os.getenv('YOUTUBE_API_KEY')
-        if not YOUTUBE_API_KEY:
-            print("[utils] YOUTUBE_API_KEY is not set.", flush=True)
-            return []
-        
-        youtube = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
-        
-        response = youtube.search().list(
-            part='snippet',
-            relatedToVideoId=video_id,
-            type='video',
-            maxResults=max_results
-        ).execute()
-        
-        return [
-            {'title': item['snippet']['title'], 'id': item['id']['videoId']}
-            for item in response.get('items', [])
-        ]
-    except Exception as e:
-        print(f"[utils] Failed to get related videos: {e}", flush=True)
-        # yt-dlp를 대체 수단으로 사용
-        with youtube_dl.YoutubeDL({'quiet': True, 'extract_flat': True}) as ydl:
-            mix_url = f"https://www.youtube.com/watch?v={video_id}&list=RD{video_id}"
-            playlist_info = ydl.extract_info(mix_url, download=False)
-            entries = playlist_info.get('entries', [])
-            return [entry for entry in entries if entry and entry.get('id') and entry.get('id') != video_id][:max_results]
 
 def setup(bot):
     bot.add_cog(MusicCog(bot))
