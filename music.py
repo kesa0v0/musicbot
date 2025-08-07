@@ -282,6 +282,11 @@ class MusicCog(discord.Cog):
 
             state.queue.append({'url': webpage_url, 'title': title, 'ctx': ctx, 'webpage_url': webpage_url, 'added_by': 'user', 'prefetched': False})
             await ctx.followup.send(f'큐에 추가됨: {title}')
+
+            # 봇이 이미 재생 중이고, 방금 추가한 곡이 큐의 유일한 곡이라면 즉시 프리페치
+            if state.is_playing and len(state.queue) == 1:
+                logger.info(f"[play] Triggering pre-emptive prefetch for user's song: {title}")
+                self.bot.loop.create_task(self._prefetch_next_song(ctx.guild.id))
             
             if not state.is_playing:
                 logger.debug(f"[play] Calling _play_next from play command. Current state.is_playing: {state.is_playing}")
@@ -330,6 +335,11 @@ class MusicCog(discord.Cog):
                 added_count += 1
 
             await ctx.followup.send(f'{added_count}개의 노래를 큐에 추가했습니다.')
+
+            # 봇이 이미 재생 중이고, 큐에 방금 추가한 곡들만 있다면 즉시 첫 곡을 프리페치
+            if state.is_playing and len(state.queue) == added_count:
+                 logger.info(f"[playlist] Triggering pre-emptive prefetch for the first song.")
+                 self.bot.loop.create_task(self._prefetch_next_song(ctx.guild.id))
             
             if not state.is_playing and added_count > 0:
                 await self._play_next(ctx)
