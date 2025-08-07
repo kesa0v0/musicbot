@@ -18,7 +18,7 @@ YDL_OPTS = {
 }
 FFMPEG_OPTS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -http_persistent 0 -analyzeduration 8M -probesize 32M',
-    'options': '-vn',
+    'options': '-vn -af loudnorm=I=-16:TP=-1.5:LRA=11',
 }
 QUEUE_LIMIT = 30
 
