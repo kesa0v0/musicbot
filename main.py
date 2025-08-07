@@ -10,6 +10,10 @@ DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 
 logging.basicConfig(level=logging.DEBUG, format='[%(asctime)s] %(levelname)s: %(message)s')
 
+logging.getLogger('discord').setLevel(logging.WARNING)
+logging.getLogger('discord.http').setLevel(logging.WARNING)
+logging.getLogger('yt_dlp').setLevel(logging.WARNING)
+
 bot = discord.Bot()
 
 @bot.event

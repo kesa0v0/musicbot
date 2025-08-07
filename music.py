@@ -68,6 +68,7 @@ class MusicCog(discord.Cog):
             logger.error(f"[prefetch] Failed for {next_song['title']}: {e}")
 
     async def _play_next(self, ctx):
+        logger.debug(f"[_play_next] Function called for guild: {ctx.guild.id}")
         """
         큐의 다음 곡을 재생합니다. 큐가 비었으면 자동재생을 시도합니다.
         이 함수는 모든 재생 로직의 중심입니다.
@@ -145,6 +146,7 @@ class MusicCog(discord.Cog):
             self.bot.loop.create_task(self._play_next(ctx))
 
         try:
+            logger.debug(f"[_play_next] Play URL: {play_url}")
             logger.debug(f"[_play_next] Attempting to create FFmpegPCMAudio source for: {next_song['title']}")
             source = discord.FFmpegPCMAudio(play_url, **FFMPEG_OPTS)
             logger.debug(f"[_play_next] FFmpegPCMAudio source created. Play URL: {play_url}")
