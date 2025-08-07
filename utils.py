@@ -7,7 +7,12 @@ logger = logging.getLogger(__name__)
 def get_related_videos(video_id, max_results=5):
     try:
         # Using yt-dlp as the primary method for related videos
-        with youtube_dl.YoutubeDL({'quiet': True, 'extract_flat': True}) as ydl:
+        ydl_opts = {
+            'quiet': True,
+            'extract_flat': True,
+            'source_address': '0.0.0.0'  # Force IPv4 to potentially fix SSL errors
+        }
+        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
             mix_url = f"https://www.youtube.com/watch?v={video_id}&list=RD{video_id}"
             playlist_info = ydl.extract_info(mix_url, download=False)
             entries = playlist_info.get('entries', [])

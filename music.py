@@ -14,6 +14,7 @@ YDL_OPTS = {
     'format': 'bestaudio[ext=m4a]/bestaudio/best',
     'quiet': True,
     'noplaylist': True,
+    'source_address': '0.0.0.0', # Force IPv4
 }
 FFMPEG_OPTS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 8M -probesize 32M',
@@ -236,7 +237,8 @@ class MusicCog(discord.Cog):
             # 검색어 지원
             search_query = f"ytsearch:{query}" if not query.startswith('http') else query
             
-            with youtube_dl.YoutubeDL({'quiet': True, 'noplaylist': True, 'default_search': 'ytsearch'}) as ydl:
+                        ydl_opts = {'quiet': True, 'noplaylist': True, 'default_search': 'ytsearch', 'source_address': '0.0.0.0'}
+            with youtube_dl.YoutubeDL(ydl_opts) as ydl:
                 info = await self.bot.loop.run_in_executor(None, functools.partial(ydl.extract_info, search_query, download=False))
             
             # 검색 결과가 리스트일 경우 첫 번째 항목 사용
@@ -275,7 +277,8 @@ class MusicCog(discord.Cog):
                     await ctx.followup.send("음성 채널에 먼저 참여해주세요.")
                     return
 
-            with youtube_dl.YoutubeDL({'quiet': True, 'noplaylist': False, 'extract_flat': True}) as ydl:
+                        ydl_opts = {'quiet': True, 'noplaylist': False, 'extract_flat': True, 'source_address': '0.0.0.0'}
+            with youtube_dl.YoutubeDL(ydl_opts) as ydl:
                 info = await self.bot.loop.run_in_executor(None, functools.partial(ydl.extract_info, url, download=False))
             
             entries = info.get('entries')
