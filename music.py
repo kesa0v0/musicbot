@@ -86,6 +86,42 @@ class MusicCog(discord.Cog):
         except Exception as e:
             logger.error(f"[prefetch] Failed for {next_song['title']}: {e}")
 
+    async def _schedule_autoplay_if_needed(self, guild_id, ctx):
+        """현재 곡 재생 직후, 큐가 비어있다면 다음 자동재생 곡을 미리 준비합니다."""
+        await asyncio.sleep(1) # state.current_song이 확실히 설정되도록 잠시 대기
+        state = self._get_state(guild_id)
+
+        # 큐에 노래가 있거나, 자동재생이 꺼져있으면 아무것도 안 함
+        if state.queue or not state.autoplay_enabled or not state.current_song:
+            return
+
+        logger.info(f"[pre-emptive-autoplay] Queue is empty. Scheduling next song.")
+        
+        last_url = state.current_song['webpage_url']
+        import re
+        match = re.search(r"v=([\w-]+)", last_url)
+        video_id = match.group(1) if match else None
+
+        if video_id:
+            try:
+                related_videos = await self.bot.loop.run_in_executor(
+                    None, functools.partial(get_related_videos, video_id, max_results=1)
+                )
+                if related_videos:
+                    video_info = related_videos[0]
+                    video_id = video_info.get('id')
+                    title = video_info.get('title', 'Unknown Title')
+                    url = f"https://www.youtube.com/watch?v={video_id}"
+                    
+                    # 큐에 추가하고 바로 프리페치 실행
+                    state.queue.append({'url': url, 'title': title, 'ctx': ctx, 'webpage_url': url, 'prefetched': False, 'added_by': 'autoplay'})
+                    logger.info(f"[pre-emptive-autoplay] Added '{title}'. Now prefetching.")
+                    await self._prefetch_next_song(guild_id)
+
+            except Exception as e:
+                logger.error(f"[pre-emptive-autoplay] Failed: {e}")
+
+
     async def _play_next(self, ctx):
         logger.debug(f"[_play_next] Function called for guild: {ctx.guild.id}")
         """
@@ -95,9 +131,9 @@ class MusicCog(discord.Cog):
         guild_id = ctx.guild.id
         state = self._get_state(guild_id)
 
-        # 1. 큐가 비어있고, 다음 곡이 필요할 때 자동재생을 시도합니다.
+        # 1. 큐가 비어있는 경우, 자동재생을 시도합니다. (안전장치)
         if not state.queue:
-            logger.info(f"[_play_next] Queue is empty, attempting autoplay.")
+            logger.info(f"[_play_next] Queue is empty, attempting autoplay as a fallback.")
             if state.autoplay_enabled and state.current_song:
                 last_url = state.current_song['webpage_url']
                 logger.info(f"[autoplay] Triggered. Fetching recommendation based on: {last_url}")
@@ -117,25 +153,15 @@ class MusicCog(discord.Cog):
                                 title = video_info.get('title', 'Unknown Title')
                                 url = f"https://www.youtube.com/watch?v={new_video_id}"
                                 
-                                # 새 노래를 큐에 추가합니다. 프리페치는 재생 직전에 수행됩니다.
                                 state.queue.append({'url': url, 'title': title, 'ctx': ctx, 'webpage_url': url, 'prefetched': False, 'added_by': 'autoplay'})
                                 logger.info(f"[autoplay] Added '{title}' to the queue.")
                             else:
                                 logger.warning("[autoplay] Found related video, but it has invalid data.")
                         else:
                             logger.info("[autoplay] No related videos found.")
-                            # 추천곡이 없으면 여기서 재생을 멈춥니다.
-                            state.is_playing = False
-                            state.current_song = None
-                            return
                     except Exception as e:
                         logger.error(f"[autoplay] Exception: {e}")
-                        # 오류 발생 시에도 재생을 멈춥니다.
-                        state.is_playing = False
-                        state.current_song = None
-                        return
-            
-            # 자동재생이 비활성화되었거나, 추천곡을 찾지 못했거나, 오류가 발생한 경우
+
             if not state.queue:
                 logger.info(f"[_play_next] Stopping playback as queue is still empty.")
                 state.is_playing = False
@@ -172,24 +198,19 @@ class MusicCog(discord.Cog):
         def after_playing(error):
             if error:
                 logger.error(f"[_play_next:after] Error playing {next_song['title']}: {error}")
-            # self.bot.loop를 사용하여 코루틴을 스레드 안전하게 실행
             self.bot.loop.create_task(self._play_next(ctx))
 
         try:
-            logger.debug(f"[_play_next] Play URL: {play_url}")
-            logger.debug(f"[_play_next] Attempting to create FFmpegPCMAudio source for: {next_song['title']}")
             source = discord.FFmpegPCMAudio(play_url, **FFMPEG_OPTS)
-            logger.debug(f"[_play_next] FFmpegPCMAudio source created. Play URL: {play_url}")
-            
-            logger.debug(f"[_play_next] Attempting to play audio for: {next_song['title']}")
             voice_client.play(source, after=after_playing)
-            logger.debug(f"[_play_next] Playback initiated for: {next_song['title']}")
-            
             await ctx.channel.send(f'Now playing: {next_song["title"]}\nURL: {next_song["webpage_url"]}')
 
-            # 3. 재생 시작 후, 다음 곡이 있다면 프리페칭합니다.
+            # 3. 재생 시작 후, 다음 곡을 선제적으로 준비합니다.
+            # 사용자가 추가한 곡이 있으면 그것을 프리페치하고, 없으면 자동재생 곡을 준비합니다.
             if state.queue:
                 self.bot.loop.create_task(self._prefetch_next_song(guild_id))
+            else:
+                self.bot.loop.create_task(self._schedule_autoplay_if_needed(guild_id, ctx))
 
         except Exception as e:
             logger.exception(f"[_play_next] Critical error trying to play {next_song['title']}")
