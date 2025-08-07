@@ -5,6 +5,7 @@ import functools
 from collections import deque
 from utils import get_related_videos
 import logging
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class GuildState:
         self.current_song = None
         self.is_playing = False
         self.autoplay_enabled = True # 자동재생 기본값
+        self.played_history = deque(maxlen=20) # 최근 재생된 곡 ID 저장
 
 class MusicCog(discord.Cog):
     """음악 기능 관련 모든 로직을 담는 Cog 클래스"""
@@ -105,18 +107,31 @@ class MusicCog(discord.Cog):
         if video_id:
             try:
                 related_videos = await self.bot.loop.run_in_executor(
-                    None, functools.partial(get_related_videos, video_id, max_results=1)
+                    None, functools.partial(get_related_videos, video_id, max_results=10)
                 )
                 if related_videos:
-                    video_info = related_videos[0]
-                    video_id = video_info.get('id')
-                    title = video_info.get('title', 'Unknown Title')
-                    url = f"https://www.youtube.com/watch?v={video_id}"
+                    # 현재 큐에 있는 곡들의 ID와 재생 기록에 있는 곡들의 ID를 수집
+                    current_queue_ids = {re.search(r"v=([\w-]+)", song['webpage_url']).group(1) for song in state.queue if re.search(r"v=([\w-]+)", song['webpage_url'])}
+                    played_history_ids = set(state.played_history)
                     
-                    # 큐에 추가하고 바로 프리페치 실행
-                    state.queue.append({'url': url, 'title': title, 'ctx': ctx, 'webpage_url': url, 'prefetched': False, 'added_by': 'autoplay'})
-                    logger.info(f"[pre-emptive-autoplay] Added '{title}'. Now prefetching.")
-                    await self._prefetch_next_song(guild_id)
+                    # 필터링된 추천곡 목록 생성
+                    filtered_videos = [
+                        v for v in related_videos 
+                        if v.get('id') and v['id'] not in current_queue_ids and v['id'] not in played_history_ids
+                    ]
+
+                    if filtered_videos:
+                        video_info = random.choice(filtered_videos) # 무작위로 하나 선택
+                        video_id = video_info.get('id')
+                        title = video_info.get('title', 'Unknown Title')
+                        url = f"https://www.youtube.com/watch?v={video_id}"
+                        
+                        # 큐에 추가하고 바로 프리페치 실행
+                        state.queue.append({'url': url, 'title': title, 'ctx': ctx, 'webpage_url': url, 'prefetched': False, 'added_by': 'autoplay'})
+                        logger.info(f"[pre-emptive-autoplay] Added '{title}'. Now prefetching.")
+                        await self._prefetch_next_song(guild_id)
+                    else:
+                        logger.info("[pre-emptive-autoplay] No new related videos found after filtering.")
 
             except Exception as e:
                 logger.error(f"[pre-emptive-autoplay] Failed: {e}")
@@ -144,19 +159,32 @@ class MusicCog(discord.Cog):
                     try:
                         # 관련 동영상을 1개만 가져옵니다.
                         related_videos = await self.bot.loop.run_in_executor(
-                            None, functools.partial(get_related_videos, video_id, max_results=1)
+                            None, functools.partial(get_related_videos, video_id, max_results=10)
                         )
                         if related_videos:
-                            video_info = related_videos[0]
-                            if isinstance(video_info, dict) and video_info.get('id'):
-                                new_video_id = video_info.get('id')
-                                title = video_info.get('title', 'Unknown Title')
-                                url = f"https://www.youtube.com/watch?v={new_video_id}"
-                                
-                                state.queue.append({'url': url, 'title': title, 'ctx': ctx, 'webpage_url': url, 'prefetched': False, 'added_by': 'autoplay'})
-                                logger.info(f"[autoplay] Added '{title}' to the queue.")
+                            # 현재 큐에 있는 곡들의 ID와 재생 기록에 있는 곡들의 ID를 수집
+                            current_queue_ids = {re.search(r"v=([\w-]+)", song['webpage_url']).group(1) for song in state.queue if re.search(r"v=([\w-]+)", song['webpage_url'])}
+                            played_history_ids = set(state.played_history)
+
+                            # 필터링된 추천곡 목록 생성
+                            filtered_videos = [
+                                v for v in related_videos 
+                                if v.get('id') and v['id'] not in current_queue_ids and v['id'] not in played_history_ids
+                            ]
+
+                            if filtered_videos:
+                                video_info = random.choice(filtered_videos) # 무작위로 하나 선택
+                                if isinstance(video_info, dict) and video_info.get('id'):
+                                    new_video_id = video_info.get('id')
+                                    title = video_info.get('title', 'Unknown Title')
+                                    url = f"https://www.youtube.com/watch?v={new_video_id}"
+                                    
+                                    state.queue.append({'url': url, 'title': title, 'ctx': ctx, 'webpage_url': url, 'prefetched': False, 'added_by': 'autoplay'})
+                                    logger.info(f"[autoplay] Added '{title}' to the queue.")
+                                else:
+                                    logger.warning("[autoplay] Found related video, but it has invalid data.")
                             else:
-                                logger.warning("[autoplay] Found related video, but it has invalid data.")
+                                logger.info("[autoplay] No new related videos found after filtering.")
                         else:
                             logger.info("[autoplay] No related videos found.")
                     except Exception as e:
@@ -198,6 +226,13 @@ class MusicCog(discord.Cog):
         def after_playing(error):
             if error:
                 logger.error(f"[_play_next:after] Error playing {next_song['title']}: {error}")
+            if next_song.get('webpage_url'):
+                import re
+                match = re.search(r"v=([\w-]+)", next_song['webpage_url'])
+                video_id = match.group(1) if match else None
+                if video_id:
+                    state.played_history.append(video_id)
+                    logger.info(f"[autoplay] Added {video_id} to played history.")
             self.bot.loop.create_task(self._play_next(ctx))
 
         try:
