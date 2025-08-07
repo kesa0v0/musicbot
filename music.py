@@ -47,11 +47,17 @@ class SongSelectionView(discord.ui.View):
             button = discord.ui.Button(label=str(i+1), style=discord.ButtonStyle.primary, custom_id=f"select_song_{i}")
             button.callback = self.create_callback(entry)
             self.add_item(button)
+        
+        # 취소 버튼 추가
+        cancel_button = discord.ui.Button(label="취소", style=discord.ButtonStyle.danger, custom_id="cancel_selection")
+        cancel_button.callback = self.cancel_callback
+        self.add_item(cancel_button)
 
     async def on_timeout(self):
         for item in self.children:
             item.disabled = True
         await self.message.edit(content="곡 선택 시간이 초과되었습니다.", view=self)
+        self.stop()
 
     def create_callback(self, entry):
         async def callback(interaction: discord.Interaction):
@@ -64,6 +70,16 @@ class SongSelectionView(discord.ui.View):
             await interaction.response.edit_message(content=f"'{entry.get('title', 'Unknown Title')}'을(를) 선택했습니다.", view=self)
             self.stop()
         return callback
+
+    async def cancel_callback(self, interaction: discord.Interaction):
+        if interaction.user != self.original_ctx.author:
+            await interaction.response.send_message("이 버튼은 당신을 위한 것이 아닙니다.", ephemeral=True)
+            return
+        self.selected_entry = None # 선택 취소
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content="곡 선택이 취소되었습니다.", view=self)
+        self.stop()
 
 class MusicCog(discord.Cog):
     """음악 기능 관련 모든 로직을 담는 Cog 클래스"""
@@ -346,30 +362,17 @@ class MusicCog(discord.Cog):
             else:
                 logger.debug("[play] Bot already connected to a voice channel.")
 
-            # 검색어 처리 로직 변경
-            is_url = query.startswith('http')
-            selected_info = None
-
-            if is_url:
-                ydl_opts = {'quiet': True, 'noplaylist': True, 'source_address': '0.0.0.0'}
-                with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-                    info = await self.bot.loop.run_in_executor(None, functools.partial(ydl.extract_info, query, download=False))
-                if 'entries' in info:
-                    selected_info = info['entries'][0]
-                else:
-                    selected_info = info
-            else:
-                # 검색 수행
-                ydl_opts = {'quiet': True, 'noplaylist': True, 'default_search': 'ytsearch', 'source_address': '0.0.0.0'}
-                with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-                    search_results = await self.bot.loop.run_in_executor(None, functools.partial(ydl.extract_info, query, download=False))
-
-                if not search_results or 'entries' not in search_results:
-                    await ctx.followup.send(f"'{query}'에 대한 검색 결과를 찾을 수 없습니다.")
-                    return
-
-                # 상위 5개 결과 표시
-                entries = [e for e in search_results['entries'] if e and e.get('id')][:5]
+            # 검색어 지원
+            search_query = f"ytsearch5:{query}" if not query.startswith('http') else query
+            
+            ydl_opts = {'quiet': True, 'noplaylist': True, 'default_search': 'ytsearch', 'source_address': '0.0.0.0'}
+            with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+                info = await self.bot.loop.run_in_executor(None, functools.partial(ydl.extract_info, search_query, download=False))
+            
+            # 검색 결과가 리스트일 경우 첫 번째 항목 사용
+            if 'entries' in info:
+                # 검색 결과가 여러 개일 경우, SongSelectionView를 사용하여 사용자에게 선택지를 제공
+                entries = [e for e in info['entries'] if e and e.get('id')][:5] # 최대 5개 결과
                 if not entries:
                     await ctx.followup.send(f"'{query}'에 대한 검색 결과를 찾을 수 없습니다.")
                     return
@@ -379,8 +382,6 @@ class MusicCog(discord.Cog):
                     msg += f"{i+1}. {entry.get('title', 'Unknown Title')}\n"
 
                 view = SongSelectionView(entries, ctx)
-                # ctx.followup.send 대신 ctx.send를 사용하여 view를 보낼 수 있도록 함
-                # defer()를 이미 했으므로 followup.send를 사용해야 함
                 message = await ctx.followup.send(msg, view=view)
                 view.message = message # view에서 메시지를 참조할 수 있도록 설정
 
@@ -390,12 +391,11 @@ class MusicCog(discord.Cog):
                     selected_info = view.selected_entry
                 else:
                     # 시간 초과 또는 선택 없음
-                    await ctx.channel.send("곡 선택이 취소되었습니다.", delete_after=10)
+                    await ctx.followup.send("곡 선택이 취소되었습니다.")
                     return
-
-            if not selected_info:
-                await ctx.followup.send("선택된 곡 정보를 가져올 수 없습니다.")
-                return
+            else:
+                # 단일 URL이거나 검색 결과가 하나일 경우
+                selected_info = info
 
             title = selected_info.get('title', 'Unknown Title')
             webpage_url = selected_info.get('webpage_url', f"https://www.youtube.com/watch?v={selected_info.get('id')}")
