@@ -265,29 +265,73 @@ class MusicCog(discord.Cog):
                     return
             else:
                 logger.debug("[play] Bot already connected to a voice channel.")
-            
-            # 검색어 지원
-            search_query = f"ytsearch:{query}" if not query.startswith('http') else query
-            
-            ydl_opts = {'quiet': True, 'noplaylist': True, 'default_search': 'ytsearch', 'source_address': '0.0.0.0'}
-            with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-                info = await self.bot.loop.run_in_executor(None, functools.partial(ydl.extract_info, search_query, download=False))
-            
-            # 검색 결과가 리스트일 경우 첫 번째 항목 사용
-            if 'entries' in info:
-                info = info['entries'][0]
 
-            title = info.get('title', 'Unknown Title')
-            webpage_url = info.get('webpage_url', query)
+            # 검색어 처리 로직 변경
+            is_url = query.startswith('http')
+            selected_info = None
+
+            if is_url:
+                ydl_opts = {'quiet': True, 'noplaylist': True, 'source_address': '0.0.0.0'}
+                with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+                    info = await self.bot.loop.run_in_executor(None, functools.partial(ydl.extract_info, query, download=False))
+                if 'entries' in info:
+                    selected_info = info['entries'][0]
+                else:
+                    selected_info = info
+            else:
+                # 검색 수행
+                ydl_opts = {'quiet': True, 'noplaylist': True, 'default_search': 'ytsearch', 'source_address': '0.0.0.0'}
+                with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+                    search_results = await self.bot.loop.run_in_executor(None, functools.partial(ydl.extract_info, query, download=False))
+
+                if not search_results or 'entries' not in search_results:
+                    await ctx.followup.send(f"'{query}'에 대한 검색 결과를 찾을 수 없습니다.")
+                    return
+
+                # 상위 5개 결과 표시
+                entries = [e for e in search_results['entries'] if e and e.get('id')][:5]
+                if not entries:
+                    await ctx.followup.send(f"'{query}'에 대한 검색 결과를 찾을 수 없습니다.")
+                    return
+
+                msg = "다음 중 재생할 곡의 번호를 선택해주세요 (1-{}):\n".format(len(entries))
+                for i, entry in enumerate(entries):
+                    msg += f"{i+1}. {entry.get('title', 'Unknown Title')}\n"
+                msg += "\n(30초 이내에 번호를 입력해주세요.)"
+
+                await ctx.followup.send(msg)
+
+                def check(m):
+                    return m.author == ctx.author and m.channel == ctx.channel and m.content.isdigit() and 1 <= int(m.content) <= len(entries)
+
+                try:
+                    response = await self.bot.wait_for('message', check=check, timeout=30.0)
+                    selected_index = int(response.content) - 1
+                    selected_info = entries[selected_index]
+                    await response.delete() # 사용자의 선택 메시지 삭제
+                except asyncio.TimeoutError:
+                    await ctx.channel.send("시간 초과되었습니다. 다시 시도해주세요.", delete_after=10)
+                    return
+                except Exception as e:
+                    logger.error(f"[play] Error during selection: {e}")
+                    await ctx.channel.send("잘못된 입력입니다. 다시 시도해주세요.", delete_after=10)
+                    return
+
+            if not selected_info:
+                await ctx.followup.send("선택된 곡 정보를 가져올 수 없습니다.")
+                return
+
+            title = selected_info.get('title', 'Unknown Title')
+            webpage_url = selected_info.get('webpage_url', f"https://www.youtube.com/watch?v={selected_info.get('id')}")
 
             state.queue.append({'url': webpage_url, 'title': title, 'ctx': ctx, 'webpage_url': webpage_url, 'added_by': 'user', 'prefetched': False})
-            await ctx.followup.send(f'큐에 추가됨: {title}')
+            await ctx.channel.send(f'큐에 추가됨: {title}') # ctx.followup.send 대신 ctx.channel.send 사용
 
             # 봇이 이미 재생 중이고, 방금 추가한 곡이 큐의 유일한 곡이라면 즉시 프리페치
             if state.is_playing and len(state.queue) == 1:
                 logger.info(f"[play] Triggering pre-emptive prefetch for user's song: {title}")
                 self.bot.loop.create_task(self._prefetch_next_song(ctx.guild.id))
-            
+
             if not state.is_playing:
                 logger.debug(f"[play] Calling _play_next from play command. Current state.is_playing: {state.is_playing}")
                 await self._play_next(ctx)
