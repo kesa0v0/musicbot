@@ -205,10 +205,15 @@ class MusicCog(discord.Cog):
 
             if not ctx.voice_client:
                 if ctx.author.voice:
+                    logger.debug(f"[play] Attempting to connect to voice channel: {ctx.author.voice.channel.name}")
                     await ctx.author.voice.channel.connect()
+                    logger.debug(f"[play] Successfully connected to voice channel: {ctx.author.voice.channel.name}")
                 else:
+                    logger.debug("[play] User not in a voice channel.")
                     await ctx.followup.send("음성 채널에 먼저 참여해주세요.")
                     return
+            else:
+                logger.debug("[play] Bot already connected to a voice channel.")
             
             # 검색어 지원
             search_query = f"ytsearch:{query}" if not query.startswith('http') else query
