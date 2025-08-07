@@ -17,7 +17,7 @@ YDL_OPTS = {
     'source_address': '0.0.0.0', # Force IPv4
 }
 FFMPEG_OPTS = {
-    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 8M -probesize 32M',
+    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -http_persistent 0 -analyzeduration 8M -probesize 32M',
     'options': '-vn',
 }
 QUEUE_LIMIT = 30
