@@ -106,8 +106,10 @@ class MusicCog(discord.Cog):
                 video_id = match.group(1) if match else None
                 if video_id:
                     try:
-                        # utils.py의 함수를 직접 호출
-                        related_videos = get_related_videos(video_id, max_results=3)
+                        # utils.py의 함수를 비동기적으로 호출
+                        related_videos = await self.bot.loop.run_in_executor(
+                            None, functools.partial(get_related_videos, video_id, max_results=3)
+                        )
                         if related_videos:
                             for video_info in related_videos:
                                 if isinstance(video_info, dict) and video_info.get('id'):
