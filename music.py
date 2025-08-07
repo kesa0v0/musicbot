@@ -237,7 +237,7 @@ class MusicCog(discord.Cog):
             # 검색어 지원
             search_query = f"ytsearch:{query}" if not query.startswith('http') else query
             
-                        ydl_opts = {'quiet': True, 'noplaylist': True, 'default_search': 'ytsearch', 'source_address': '0.0.0.0'}
+            ydl_opts = {'quiet': True, 'noplaylist': True, 'default_search': 'ytsearch', 'source_address': '0.0.0.0'}
             with youtube_dl.YoutubeDL(ydl_opts) as ydl:
                 info = await self.bot.loop.run_in_executor(None, functools.partial(ydl.extract_info, search_query, download=False))
             
@@ -277,7 +277,7 @@ class MusicCog(discord.Cog):
                     await ctx.followup.send("음성 채널에 먼저 참여해주세요.")
                     return
 
-                        ydl_opts = {'quiet': True, 'noplaylist': False, 'extract_flat': True, 'source_address': '0.0.0.0'}
+            ydl_opts = {'quiet': True, 'noplaylist': False, 'extract_flat': True, 'source_address': '0.0.0.0'}
             with youtube_dl.YoutubeDL(ydl_opts) as ydl:
                 info = await self.bot.loop.run_in_executor(None, functools.partial(ydl.extract_info, url, download=False))
             
