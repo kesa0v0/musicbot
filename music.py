@@ -150,7 +150,7 @@ class MusicCog(discord.Cog):
 
         except Exception as e:
             print(f"[_play_next] Critical error trying to play {next_song['title']}: {e}", flush=True)
-            await ctx.channel.send(f"''{next_song["title"]}' 재생 중 심각한 오류가 발생했습니다.")
+            await ctx.channel.send(f"'{next_song['title']}' 재생 중 심각한 오류가 발생했습니다.")
             await self._play_next(ctx)
 
     # --- 사용자 명령어 ---
