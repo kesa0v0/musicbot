@@ -227,6 +227,7 @@ class MusicCog(discord.Cog):
             await ctx.followup.send(f'큐에 추가됨: {title}')
             
             if not state.is_playing:
+                logger.debug(f"[play] Calling _play_next from play command. Current state.is_playing: {state.is_playing}")
                 await self._play_next(ctx)
 
         except Exception as e:
