@@ -360,7 +360,7 @@ class MusicCog(discord.Cog):
             webpage_url = selected_info.get('webpage_url', f"https://www.youtube.com/watch?v={selected_info.get('id')}")
 
             state.queue.append({'url': webpage_url, 'title': title, 'ctx': ctx, 'webpage_url': webpage_url, 'added_by': 'user', 'prefetched': False})
-            await ctx.channel.send(f'큐에 추가됨: {title}') # ctx.followup.send 대신 ctx.channel.send 사용
+            await ctx.followup.send(f'큐에 추가됨: {title}')
 
             # 봇이 이미 재생 중이고, 방금 추가한 곡이 큐의 유일한 곡이라면 즉시 프리페치
             if state.is_playing and len(state.queue) == 1:
