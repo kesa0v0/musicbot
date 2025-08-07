@@ -4,6 +4,9 @@ import yt_dlp as youtube_dl
 import functools
 from collections import deque
 from utils import get_related_videos
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # yt-dlp와 FFmpeg 옵션 설정
@@ -49,7 +52,7 @@ class MusicCog(discord.Cog):
         if next_song.get('prefetched', False):
             return
 
-        print(f"[prefetch] Starting for: {next_song['title']}", flush=True)
+        logger.info(f"[prefetch] Starting for: {next_song['title']}")
         try:
             with youtube_dl.YoutubeDL(YDL_OPTS) as ydl:
                 info = await self.bot.loop.run_in_executor(None, functools.partial(ydl.extract_info, next_song['webpage_url'], download=False))
@@ -60,9 +63,9 @@ class MusicCog(discord.Cog):
                 stream_url = audio_formats[0]['url']
                 state.queue[0]['url'] = stream_url
                 state.queue[0]['prefetched'] = True
-                print(f"[prefetch] Success for: {next_song['title']}", flush=True)
+                logger.info(f"[prefetch] Success for: {next_song['title']}")
         except Exception as e:
-            print(f"[prefetch] Failed for {next_song['title']}: {e}", flush=True)
+            logger.error(f"[prefetch] Failed for {next_song['title']}: {e}")
 
     async def _play_next(self, ctx):
         """
@@ -74,10 +77,10 @@ class MusicCog(discord.Cog):
 
         # 1. 큐가 비어있는 경우, 자동재생을 시도합니다.
         if not state.queue:
-            print(f"[_play_next] Queue is empty.", flush=True)
+            logger.info(f"[_play_next] Queue is empty.")
             if state.autoplay_enabled and state.current_song:
                 last_url = state.current_song['webpage_url']
-                print(f"[autoplay] Triggered. Fetching recommendations based on: {last_url}", flush=True)
+                logger.info(f"[autoplay] Triggered. Fetching recommendations based on: {last_url}")
                 import re
                 match = re.search(r"v=([\w-]+)", last_url)
                 video_id = match.group(1) if match else None
@@ -94,16 +97,16 @@ class MusicCog(discord.Cog):
                                     state.queue.append({'url': url, 'title': title, 'ctx': ctx, 'webpage_url': url, 'prefetched': False, 'added_by': 'autoplay'})
                             
                             if state.queue:
-                                print(f"[autoplay] Added {len(related_videos)} songs. Restarting _play_next.", flush=True)
+                                logger.info(f"[autoplay] Added {len(related_videos)} songs. Restarting _play_next.")
                                 await self._play_next(ctx)
                                 return
                         else:
                             await ctx.channel.send('Autoplay: 추천곡을 찾지 못했습니다.')
                     except Exception as e:
-                        print(f"[autoplay] Exception: {e}", flush=True)
+                        logger.error(f"[autoplay] Exception: {e}")
                         await ctx.channel.send(f'Autoplay: 추천곡 재생 중 오류가 발생했습니다: {e}')
             
-            print(f"[_play_next] Stopping playback.", flush=True)
+            logger.info(f"[_play_next] Stopping playback.")
             state.is_playing = False
             state.current_song = None
             return
@@ -117,7 +120,7 @@ class MusicCog(discord.Cog):
 
         play_url = next_song.get('url')
         if not next_song.get('prefetched', False):
-            print(f"[_play_next] Song not prefetched. Fetching stream URL for: {next_song['title']}", flush=True)
+            logger.info(f"[_play_next] Song not prefetched. Fetching stream URL for: {next_song['title']}")
             try:
                 with youtube_dl.YoutubeDL(YDL_OPTS) as ydl:
                     info = await self.bot.loop.run_in_executor(None, functools.partial(ydl.extract_info, next_song['webpage_url'], download=False))
@@ -125,9 +128,9 @@ class MusicCog(discord.Cog):
                 if not audio_formats:
                     raise ValueError("No suitable audio stream found")
                 play_url = audio_formats[0]['url']
-                print(f"[_play_next] Stream URL fetched successfully.", flush=True)
+                logger.info(f"[_play_next] Stream URL fetched successfully.")
             except Exception as e:
-                print(f"[_play_next] Failed to fetch stream URL for {next_song['title']}: {e}", flush=True)
+                logger.error(f"[_play_next] Failed to fetch stream URL for {next_song['title']}: {e}")
                 await ctx.channel.send(f"'{next_song['title']}'을(를) 재생할 수 없어 건너뜁니다.")
                 await self._play_next(ctx)
                 return
@@ -137,7 +140,7 @@ class MusicCog(discord.Cog):
         
         def after_playing(error):
             if error:
-                print(f"[_play_next:after] Error playing {next_song['title']}: {error}", flush=True)
+                logger.error(f"[_play_next:after] Error playing {next_song['title']}: {error}")
             # self.bot.loop를 사용하여 코루틴을 스레드 안전하게 실행
             self.bot.loop.create_task(self._play_next(ctx))
 
@@ -151,7 +154,7 @@ class MusicCog(discord.Cog):
                 self.bot.loop.create_task(self._prefetch_next_song(guild_id))
 
         except Exception as e:
-            print(f"[_play_next] Critical error trying to play {next_song['title']}: {e}", flush=True)
+            logger.critical(f"[_play_next] Critical error trying to play {next_song['title']}: {e}")
             await ctx.channel.send(f"'{next_song['title']}' 재생 중 심각한 오류가 발생했습니다.")
             await self._play_next(ctx)
 
@@ -177,13 +180,14 @@ class MusicCog(discord.Cog):
 
     @discord.slash_command(description="노래를 재생하거나 큐에 추가합니다.")
     async def play(self, ctx, query: str):
+        logger.info(f"[play] Received query: {query}")
         await ctx.defer()
         state = self._get_state(ctx.guild.id)
 
         # 사용자 우선 로직: 자동재생으로 추가된 곡들을 큐에서 제거합니다.
         if any(song.get('added_by') == 'autoplay' for song in state.queue):
             state.queue = deque(song for song in state.queue if song.get('added_by') != 'autoplay')
-            print(f"[play] User interrupted autoplay. Clearing autoplay songs from queue.", flush=True)
+            logger.info(f"[play] User interrupted autoplay. Clearing autoplay songs from queue.")
             await ctx.channel.send("자동재생 목록을 지웠습니다. 요청하신 곡을 우선 재생합니다.", delete_after=10)
 
         try:
@@ -218,7 +222,7 @@ class MusicCog(discord.Cog):
                 await self._play_next(ctx)
 
         except Exception as e:
-            print(f"[play] Unexpected error: {e}", flush=True)
+            logger.error(f"[play] Unexpected error: {e}")
             await ctx.followup.send(f'오류가 발생했습니다: {e}')
 
     @discord.slash_command(description="유튜브 플레이리스트를 큐에 추가합니다.")
@@ -228,7 +232,7 @@ class MusicCog(discord.Cog):
 
         if any(song.get('added_by') == 'autoplay' for song in state.queue):
             state.queue = deque(song for song in state.queue if song.get('added_by') != 'autoplay')
-            print(f"[playlist] User interrupted autoplay. Clearing autoplay songs.", flush=True)
+            logger.info(f"[playlist] User interrupted autoplay. Clearing autoplay songs.")
             await ctx.channel.send("자동재생 목록을 지웠습니다. 요청하신 재생목록을 우선 추가합니다.", delete_after=10)
 
         try:
@@ -263,7 +267,7 @@ class MusicCog(discord.Cog):
             if not state.is_playing and added_count > 0:
                 await self._play_next(ctx)
         except Exception as e:
-            print(f"[playlist] Exception: {e}", flush=True)
+            logger.error(f"플레이리스트를 가져오는 중 오류가 발생했습니다: {e}")
             await ctx.followup.send(f'플레이리스트를 가져오는 중 오류가 발생했습니다: {e}')
 
     @discord.slash_command(description="현재 재생 중인 노래를 건너뜁니다.")
