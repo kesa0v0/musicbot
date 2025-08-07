@@ -360,7 +360,6 @@ class MusicCog(discord.Cog):
         else:
             await ctx.respond("사용법: /autoplay on 또는 /autoplay off", ephemeral=True)
 
-# utils.py의 함수를 여기에 포함하거나, 별도 파일로 유지합니다.
 from googleapiclient.discovery import build
 import os
 
