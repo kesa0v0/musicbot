@@ -36,6 +36,24 @@ class MusicCog(discord.Cog):
         self.bot = bot
         self.states = {} # {guild_id: GuildState}
 
+    async def _check_and_leave(self, guild_id):
+        state = self._get_state(guild_id)
+        guild = self.bot.get_guild(guild_id)
+        if not guild:
+            return
+
+        voice_client = guild.voice_client
+        if voice_client and voice_client.is_connected():
+            # 봇 외에 다른 사람이 음성 채널에 없는지 확인
+            human_members = [m for m in voice_client.channel.members if not m.bot]
+            if not human_members:
+                logger.info(f"[auto-leave] Leaving voice channel in guild {guild_id} due to inactivity.")
+                await voice_client.disconnect()
+                state.is_playing = False
+                state.current_song = None
+                if guild_id in self.states:
+                    del self.states[guild_id] # 길드 상태 정리
+
     def _get_state(self, guild_id) -> GuildState:
         """해당 길드의 상태 객체를 가져오거나 새로 생성합니다."""
         if guild_id not in self.states:
@@ -380,5 +398,19 @@ class MusicCog(discord.Cog):
         else:
             await ctx.respond("사용법: /autoplay on 또는 /autoplay off", ephemeral=True)
 
-def setup(bot):
-    bot.add_cog(MusicCog(bot))
+    @discord.Cog.listener()
+    async def on_voice_state_update(self, member, before, after):
+        # 봇 자신이거나, 채널 변경이 없는 경우는 무시
+        if member.id == self.bot.user.id or before.channel == after.channel:
+            return
+
+        # 봇이 음성 채널에 연결되어 있고, 이전 채널에 사람이 없게 된 경우
+        if before.channel and self.bot.user in before.channel.members:
+            # 봇 외에 다른 사람이 없는지 확인
+            human_members_in_before = [m for m in before.channel.members if not m.bot]
+            if not human_members_in_before:
+                guild_id = before.channel.guild.id
+                await self._check_and_leave(guild_id)
+
+    def setup(bot):
+        bot.add_cog(MusicCog(bot))
