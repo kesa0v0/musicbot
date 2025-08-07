@@ -145,8 +145,14 @@ class MusicCog(discord.Cog):
             self.bot.loop.create_task(self._play_next(ctx))
 
         try:
+            logger.debug(f"[_play_next] Attempting to create FFmpegPCMAudio source for: {next_song['title']}")
             source = discord.FFmpegPCMAudio(play_url, **FFMPEG_OPTS)
+            logger.debug(f"[_play_next] FFmpegPCMAudio source created. Play URL: {play_url}")
+            
+            logger.debug(f"[_play_next] Attempting to play audio for: {next_song['title']}")
             voice_client.play(source, after=after_playing)
+            logger.debug(f"[_play_next] Playback initiated for: {next_song['title']}")
+            
             await ctx.channel.send(f'Now playing: {next_song["title"]}\nURL: {next_song["webpage_url"]}')
 
             # 3. 재생 시작 후, 다음 곡이 있다면 프리페칭합니다.
@@ -154,7 +160,7 @@ class MusicCog(discord.Cog):
                 self.bot.loop.create_task(self._prefetch_next_song(guild_id))
 
         except Exception as e:
-            logger.critical(f"[_play_next] Critical error trying to play {next_song['title']}: {e}")
+            logger.exception(f"[_play_next] Critical error trying to play {next_song['title']}")
             await ctx.channel.send(f"'{next_song['title']}' 재생 중 심각한 오류가 발생했습니다.")
             await self._play_next(ctx)
 
