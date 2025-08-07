@@ -95,43 +95,52 @@ class MusicCog(discord.Cog):
         guild_id = ctx.guild.id
         state = self._get_state(guild_id)
 
-        # 1. 큐가 비어있는 경우, 자동재생을 시도합니다.
+        # 1. 큐가 비어있고, 다음 곡이 필요할 때 자동재생을 시도합니다.
         if not state.queue:
-            logger.info(f"[_play_next] Queue is empty.")
+            logger.info(f"[_play_next] Queue is empty, attempting autoplay.")
             if state.autoplay_enabled and state.current_song:
                 last_url = state.current_song['webpage_url']
-                logger.info(f"[autoplay] Triggered. Fetching recommendations based on: {last_url}")
+                logger.info(f"[autoplay] Triggered. Fetching recommendation based on: {last_url}")
                 import re
                 match = re.search(r"v=([\w-]+)", last_url)
                 video_id = match.group(1) if match else None
                 if video_id:
                     try:
-                        # utils.py의 함수를 비동기적으로 호출
+                        # 관련 동영상을 1개만 가져옵니다.
                         related_videos = await self.bot.loop.run_in_executor(
-                            None, functools.partial(get_related_videos, video_id, max_results=3)
+                            None, functools.partial(get_related_videos, video_id, max_results=1)
                         )
                         if related_videos:
-                            for video_info in related_videos:
-                                if isinstance(video_info, dict) and video_info.get('id'):
-                                    video_id = video_info.get('id')
-                                    title = video_info.get('title', 'Unknown Title')
-                                    url = f"https://www.youtube.com/watch?v={video_id}"
-                                    state.queue.append({'url': url, 'title': title, 'ctx': ctx, 'webpage_url': url, 'prefetched': False, 'added_by': 'autoplay'})
-                            
-                            if state.queue:
-                                logger.info(f"[autoplay] Added {len(related_videos)} songs. Restarting _play_next.")
-                                await self._play_next(ctx)
-                                return
+                            video_info = related_videos[0]
+                            if isinstance(video_info, dict) and video_info.get('id'):
+                                new_video_id = video_info.get('id')
+                                title = video_info.get('title', 'Unknown Title')
+                                url = f"https://www.youtube.com/watch?v={new_video_id}"
+                                
+                                # 새 노래를 큐에 추가합니다. 프리페치는 재생 직전에 수행됩니다.
+                                state.queue.append({'url': url, 'title': title, 'ctx': ctx, 'webpage_url': url, 'prefetched': False, 'added_by': 'autoplay'})
+                                logger.info(f"[autoplay] Added '{title}' to the queue.")
+                            else:
+                                logger.warning("[autoplay] Found related video, but it has invalid data.")
                         else:
-                            await ctx.channel.send('Autoplay: 추천곡을 찾지 못했습니다.')
+                            logger.info("[autoplay] No related videos found.")
+                            # 추천곡이 없으면 여기서 재생을 멈춥니다.
+                            state.is_playing = False
+                            state.current_song = None
+                            return
                     except Exception as e:
                         logger.error(f"[autoplay] Exception: {e}")
-                        await ctx.channel.send(f'Autoplay: 추천곡 재생 중 오류가 발생했습니다: {e}')
+                        # 오류 발생 시에도 재생을 멈춥니다.
+                        state.is_playing = False
+                        state.current_song = None
+                        return
             
-            logger.info(f"[_play_next] Stopping playback.")
-            state.is_playing = False
-            state.current_song = None
-            return
+            # 자동재생이 비활성화되었거나, 추천곡을 찾지 못했거나, 오류가 발생한 경우
+            if not state.queue:
+                logger.info(f"[_play_next] Stopping playback as queue is still empty.")
+                state.is_playing = False
+                state.current_song = None
+                return
 
         # 2. 큐에 곡이 있으면, 다음 곡을 재생합니다.
         next_song = state.queue.popleft()
