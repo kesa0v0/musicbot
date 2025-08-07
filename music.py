@@ -6,6 +6,7 @@ from collections import deque
 from utils import get_related_videos
 import logging
 import random
+import discord.ui
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,37 @@ class GuildState:
         self.is_playing = False
         self.autoplay_enabled = True # 자동재생 기본값
         self.played_history = deque(maxlen=20) # 최근 재생된 곡 ID 저장
+        self.loop_mode = "off" # "off", "current", "queue"
+
+class SongSelectionView(discord.ui.View):
+    def __init__(self, entries, original_ctx, timeout=30):
+        super().__init__(timeout=timeout)
+        self.entries = entries
+        self.selected_entry = None
+        self.original_ctx = original_ctx
+
+        # 버튼 추가
+        for i, entry in enumerate(entries):
+            button = discord.ui.Button(label=str(i+1), style=discord.ButtonStyle.primary, custom_id=f"select_song_{i}")
+            button.callback = self.create_callback(entry)
+            self.add_item(button)
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        await self.message.edit(content="곡 선택 시간이 초과되었습니다.", view=self)
+
+    def create_callback(self, entry):
+        async def callback(interaction: discord.Interaction):
+            if interaction.user != self.original_ctx.author:
+                await interaction.response.send_message("이 버튼은 당신을 위한 것이 아닙니다.", ephemeral=True)
+                return
+            self.selected_entry = entry
+            for item in self.children:
+                item.disabled = True
+            await interaction.response.edit_message(content=f"'{entry.get('title', 'Unknown Title')}'을(를) 선택했습니다.", view=self)
+            self.stop()
+        return callback
 
 class MusicCog(discord.Cog):
     """음악 기능 관련 모든 로직을 담는 Cog 클래스"""
@@ -226,6 +258,8 @@ class MusicCog(discord.Cog):
         def after_playing(error):
             if error:
                 logger.error(f"[_play_next:after] Error playing {next_song['title']}: {error}")
+            
+            # 현재 곡의 video_id를 played_history에 추가
             if next_song.get('webpage_url'):
                 import re
                 match = re.search(r"v=([\w-]+)", next_song['webpage_url'])
@@ -233,6 +267,17 @@ class MusicCog(discord.Cog):
                 if video_id:
                     state.played_history.append(video_id)
                     logger.info(f"[autoplay] Added {video_id} to played history.")
+
+            # 반복 모드 처리
+            if state.loop_mode == "current":
+                # 현재 곡을 큐의 맨 앞에 다시 추가하여 반복
+                state.queue.appendleft(next_song)
+                logger.info(f"[loop] Looping current song: {next_song['title']}")
+            elif state.loop_mode == "queue":
+                # 현재 곡을 큐의 맨 뒤에 다시 추가하여 큐 반복
+                state.queue.append(next_song)
+                logger.info(f"[loop] Looping queue. Added {next_song['title']} to end of queue.")
+
             self.bot.loop.create_task(self._play_next(ctx))
 
         try:
@@ -329,27 +374,23 @@ class MusicCog(discord.Cog):
                     await ctx.followup.send(f"'{query}'에 대한 검색 결과를 찾을 수 없습니다.")
                     return
 
-                msg = "다음 중 재생할 곡의 번호를 선택해주세요 (1-{}):\n".format(len(entries))
+                msg = "다음 중 재생할 곡을 선택해주세요:\n"
                 for i, entry in enumerate(entries):
                     msg += f"{i+1}. {entry.get('title', 'Unknown Title')}\n"
-                msg += "\n(30초 이내에 번호를 입력해주세요.)"
 
-                await ctx.followup.send(msg)
+                view = SongSelectionView(entries, ctx)
+                # ctx.followup.send 대신 ctx.send를 사용하여 view를 보낼 수 있도록 함
+                # defer()를 이미 했으므로 followup.send를 사용해야 함
+                message = await ctx.followup.send(msg, view=view)
+                view.message = message # view에서 메시지를 참조할 수 있도록 설정
 
-                def check(m):
-                    return m.author == ctx.author and m.channel == ctx.channel and m.content.isdigit() and 1 <= int(m.content) <= len(entries)
+                await view.wait() # 사용자의 선택을 기다림
 
-                try:
-                    response = await self.bot.wait_for('message', check=check, timeout=30.0)
-                    selected_index = int(response.content) - 1
-                    selected_info = entries[selected_index]
-                    await response.delete() # 사용자의 선택 메시지 삭제
-                except asyncio.TimeoutError:
-                    await ctx.channel.send("시간 초과되었습니다. 다시 시도해주세요.", delete_after=10)
-                    return
-                except Exception as e:
-                    logger.error(f"[play] Error during selection: {e}")
-                    await ctx.channel.send("잘못된 입력입니다. 다시 시도해주세요.", delete_after=10)
+                if view.selected_entry:
+                    selected_info = view.selected_entry
+                else:
+                    # 시간 초과 또는 선택 없음
+                    await ctx.channel.send("곡 선택이 취소되었습니다.", delete_after=10)
                     return
 
             if not selected_info:
@@ -521,6 +562,17 @@ class MusicCog(discord.Cog):
             await ctx.respond("자동재생이 꺼졌습니다.")
         else:
             await ctx.respond("사용법: /autoplay on 또는 /autoplay off", ephemeral=True)
+
+    @discord.slash_command(description="반복 모드를 설정합니다. (off, current, queue)")
+    async def loop(self, ctx, mode: str):
+        state = self._get_state(ctx.guild.id)
+        mode = mode.lower()
+        if mode not in ["off", "current", "queue"]:
+            await ctx.respond("사용법: /loop off, /loop current, 또는 /loop queue", ephemeral=True)
+            return
+        
+        state.loop_mode = mode
+        await ctx.respond(f"반복 모드가 '{mode}'(으)로 설정되었습니다.")
 
     @discord.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
