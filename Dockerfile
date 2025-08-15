@@ -2,7 +2,7 @@
 FROM python:3.11.13-slim
 
 # 시스템 패키지를 업데이트하고 ffmpeg를 설치합니다.
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential ffmpeg libffi-dev python3.11-dev ca-certificates
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential ffmpeg libffi-dev python3-dev ca-certificates
 
 # 작업 디렉토리를 /app으로 설정합니다.
 WORKDIR /app
