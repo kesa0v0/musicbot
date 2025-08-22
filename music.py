@@ -90,6 +90,13 @@ class MusicCog(discord.Cog):
         self.bot = bot
         self.states = {} # {guild_id: GuildState}
 
+    async def cog_before_invoke(self, ctx: discord.ApplicationContext):
+        """모든 슬래시 커맨드 실행 전에 호출되는 후크 함수. 명령어 사용을 로깅합니다."""
+        logger.info(
+            f"[COMMAND] User='{ctx.author}' Guild='{ctx.guild.name}' "
+            f"Command='/{ctx.command.name}' Options={ctx.options}"
+        )
+
     def _get_state(self, guild_id) -> GuildState:
         """해당 길드의 상태 객체를 가져오거나 새로 생성합니다."""
         if guild_id not in self.states:
