@@ -35,6 +35,7 @@ class GuildState:
         self.autoplay_enabled = True # 자동재생 기본값
         self.played_history = deque(maxlen=20) # 최근 재생된 곡 ID 저장
         self.loop_mode = "off" # "off", "current", "queue"
+        self.play_lock = asyncio.Lock() # 재생 로직 접근을 제어할 Lock
 
 class SongSelectionView(discord.ui.View):
     def __init__(self, entries, original_ctx, timeout=30):
@@ -167,98 +168,89 @@ class MusicCog(discord.Cog):
     async def _play_next(self, ctx):
         """재생 로직의 중심. 큐의 다음 곡을 재생하고, 없으면 자동재생을 시도합니다."""
         state = self._get_state(ctx.guild.id)
-        voice_client = ctx.voice_client
-
-        if not voice_client or not voice_client.is_connected():
-            state.is_playing = False
-            return
-
-        # 1. 다음 곡 가져오기 (큐가 비었으면 자동재생 시도)
-        if not state.queue:
-            await self._add_autoplay_song(state, ctx)
-            if not state.queue: # 자동재생으로도 추가 못했으면 종료
-                logger.info(f"[_play_next] Stopping playback as queue is empty.")
-                state.is_playing = False
-                state.current_song = None
-                return
-
-        next_song = state.queue.popleft()
-
-        # 2. 스트림 URL 준비 (Just-in-Time)
-        if not next_song.get('prepared', False):
-            logger.info(f"[_play_next] Song not prepared. Preparing now: {next_song['title']}")
-            if not await self._prepare_song(next_song):
-                await ctx.channel.send(f"'{next_song['title']}'을(를) 재생할 수 없어 건너뜁니다.")
-                await self._play_next(ctx) # 즉시 다음 곡 시도
-                return
         
-        play_url = next_song['stream_url']
-        state.is_playing = True
-        state.current_song = next_song
+        async with state.play_lock: # Lock을 사용하여 동시 접근 방지
+            voice_client = ctx.voice_client
 
-        # 3. 재생 후 실행될 콜백 함수 정의
-        def after_playing(error):
-            if error:
-                logger.error(f"[_play_next:after] Playback error for {next_song['title']}: {error}")
+            if not voice_client or not voice_client.is_connected():
+                state.is_playing = False
+                return
+
+            # 1. 다음 곡 가져오기 (큐가 비었으면 자동재생 시도)
+            if not state.queue:
+                await self._add_autoplay_song(state, ctx)
+                if not state.queue: # 자동재생으로도 추가 못했으면 종료
+                    logger.info(f"[_play_next] Stopping playback as queue is empty.")
+                    state.is_playing = False
+                    state.current_song = None
+                    return
+
+            next_song = state.queue.popleft()
+
+            # 2. 스트림 URL 준비 (Just-in-Time)
+            if not next_song.get('prepared', False):
+                logger.info(f"[_play_next] Song not prepared. Preparing now: {next_song['title']}")
+                if not await self._prepare_song(next_song):
+                    await ctx.channel.send(f"'{next_song['title']}'을(를) 재생할 수 없어 건너뜁니다.")
+                    # Lock을 해제하기 전에 다음 호출을 예약해야 함
+                    self.bot.loop.create_task(self._play_next(ctx))
+                    return
             
-            match = re.search(r"v=([\w-]+)", next_song['webpage_url'])
-            if match:
-                state.played_history.append(match.group(1))
+            play_url = next_song['stream_url']
+            state.is_playing = True
+            state.current_song = next_song
 
-            if state.loop_mode == "current":
-                state.queue.appendleft(next_song)
-            elif state.loop_mode == "queue":
-                state.queue.append(next_song)
+            # 3. 재생 후 실행될 콜백 함수 정의
+            def after_playing(error):
+                if error:
+                    logger.error(f"[_play_next:after] Playback error for {next_song['title']}: {error}")
+                
+                match = re.search(r"v=([\w-]+)", next_song['webpage_url'])
+                if match:
+                    state.played_history.append(match.group(1))
 
-            self.bot.loop.create_task(self._play_next(ctx))
+                if state.loop_mode == "current":
+                    state.queue.appendleft(next_song)
+                elif state.loop_mode == "queue":
+                    state.queue.append(next_song)
 
-        # 4. 재생 시작
-        try:
-            source = discord.FFmpegPCMAudio(play_url, **FFMPEG_OPTS)
-            voice_client.play(source, after=after_playing)
-            await ctx.channel.send(f'Now playing: {next_song["title"]}URL: <{next_song["webpage_url"]}>
+                self.bot.loop.create_task(self._play_next(ctx))
+
+            # 4. 재생 시작
+            try:
+                source = discord.FFmpegPCMAudio(play_url, **FFMPEG_OPTS)
+                voice_client.play(source, after=after_playing)
+                await ctx.channel.send(f'Now playing: {next_song["title"]} 
+URL: <{next_song["webpage_url"]}>
 ')
 
-            # 5. 다음 곡 미리 준비 (Hybrid Prefetch)
-            if state.queue:
-                self.bot.loop.create_task(self._prepare_song(state.queue[0]))
+                # 5. 다음 곡 미리 준비 (Hybrid Prefetch)
+                if state.queue:
+                    self.bot.loop.create_task(self._prepare_song(state.queue[0]))
 
-        except Exception as e:
-            logger.error(f"[_play_next] Critical error for {next_song['title']}")
-            await ctx.channel.send(f"'{next_song['title']}' 재생 중 심각한 오류가 발생했습니다.")
-            await self._play_next(ctx)
+            except Exception as e:
+                logger.error(f"[_play_next] Critical error for {next_song['title']}: {e}")
+                await ctx.channel.send(f"'{next_song['title']}' 재생 중 심각한 오류가 발생했습니다.")
+                self.bot.loop.create_task(self._play_next(ctx))
 
     # --- 사용자 명령어 ---
 
     @discord.slash_command(description="음악봇 명령어 도움말을 보여줍니다.")
     async def help(self, ctx):
         help_text = (
-            "**[음악봇 명령어 안내]**
-"
-            "/play <url 또는 검색어> : 노래를 큐에 추가 및 재생
-"
-            "/playlist <url> : 유튜브 플레이리스트 전체 추가
-"
-            "/skip : 현재 곡 스킵
-"
-            "/pause : 곡 일시정지
-"
-            "/resume : 곡 재개
-"
-            "/queue : 큐 목록 보기
-"
-            "/remove <번호> : 큐에서 곡 제거
-"
-            "/clear : 큐 전체 비우기
-"
-            "/nowplaying : 현재 재생 곡 정보
-"
-            "/leave : 음성 채널에서 봇 퇴장
-"
-            "/autoplay [on/off] : 자동재생 기능 켜기/끄기
-"
-            "/loop [off/current/queue] : 반복 모드 설정
-"
+            "**[음악봇 명령어 안내]**\n"
+            "/play <url 또는 검색어> : 노래를 큐에 추가 및 재생\n"
+            "/playlist <url> : 유튜브 플레이리스트 전체 추가\n"
+            "/skip : 현재 곡 스킵\n"
+            "/pause : 곡 일시정지\n"
+            "/resume : 곡 재개\n"
+            "/queue : 큐 목록 보기\n"
+            "/remove <번호> : 큐에서 곡 제거\n"
+            "/clear : 큐 전체 비우기\n"
+            "/nowplaying : 현재 재생 곡 정보\n"
+            "/leave : 음성 채널에서 봇 퇴장\n"
+            "/autoplay [on/off] : 자동재생 기능 켜기/끄기\n"
+            "/loop [off/current/queue] : 반복 모드 설정\n"
         )
         await ctx.respond(help_text, ephemeral=True)
 
@@ -297,8 +289,7 @@ class MusicCog(discord.Cog):
                     await ctx.followup.send(f"'{query}'에 대한 검색 결과를 찾을 수 없습니다.")
                     return
 
-                msg = "다음 중 재생할 곡을 선택해주세요:
-" + '\n'.join([f"{i+1}. {e.get('title', 'Unknown')}" for i, e in enumerate(entries)])
+                msg = "다음 중 재생할 곡을 선택해주세요:\n" + '\n'.join([f"{i+1}. {e.get('title', 'Unknown')}" for i, e in enumerate(entries)])
                 view = SongSelectionView(entries, ctx)
                 message = await ctx.followup.send(msg, view=view)
                 view.message = message
@@ -434,7 +425,8 @@ class MusicCog(discord.Cog):
     async def nowplaying(self, ctx):
         state = self._get_state(ctx.guild.id)
         if state.current_song:
-            await ctx.respond(f'현재 재생 중: {state.current_song["title"]}URL: <{state.current_song["webpage_url"]}>
+            await ctx.respond(f'현재 재생 중: {state.current_song["title"]} 
+URL: <{state.current_song["webpage_url"]}>
 ')
         else:
             await ctx.respond("재생 중인 노래가 없습니다.", ephemeral=True)
