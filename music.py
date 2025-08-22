@@ -120,7 +120,7 @@ class MusicCog(discord.Cog):
             # HLS 스트림을 명시적으로 제외하고, URL이 있는 오디오 포맷만 필터링
             filtered_formats = []
             for f in info.get('formats', []):
-                if f.get('acodec') != 'none' and f.get('url') and 'hls' not in f.get('protocol', ' '):
+                if f.get('acodec') != 'none' and f.get('url') and 'hls' not in f.get('protocol', ''):
                     filtered_formats.append(f)
 
             if not filtered_formats:
@@ -128,8 +128,8 @@ class MusicCog(discord.Cog):
                 song['prepared'] = False
                 return False
 
-            # 오디오 비트레이트(abr)가 높은 순으로 정렬
-            filtered_formats.sort(key=lambda f: f.get('abr', 0), reverse=True)
+            # 오디오 비트레이트(abr)가 None인 경우를 안전하게 처리하며 높은 순으로 정렬
+            filtered_formats.sort(key=lambda f: f.get('abr') or 0, reverse=True)
             
             song['stream_url'] = filtered_formats[0]['url']
             song['prepared'] = True
