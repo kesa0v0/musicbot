@@ -220,9 +220,8 @@ class MusicCog(discord.Cog):
             try:
                 source = discord.FFmpegPCMAudio(play_url, **FFMPEG_OPTS)
                 voice_client.play(source, after=after_playing)
-                await ctx.channel.send(f'Now playing: {next_song["title"]} 
-URL: <{next_song["webpage_url"]}>
-')
+                await ctx.channel.send(f'Now playing: {next_song["title"]}\n' +
+                                        f'URL: <{next_song["webpage_url"]}>')
 
                 # 5. 다음 곡 미리 준비 (Hybrid Prefetch)
                 if state.queue:
@@ -425,9 +424,8 @@ URL: <{next_song["webpage_url"]}>
     async def nowplaying(self, ctx):
         state = self._get_state(ctx.guild.id)
         if state.current_song:
-            await ctx.respond(f'현재 재생 중: {state.current_song["title"]} 
-URL: <{state.current_song["webpage_url"]}>
-')
+            await ctx.respond(f'현재 재생 중: {state.current_song["title"]}\n' +
+                              f'URL: <{state.current_song["webpage_url"]}>')
         else:
             await ctx.respond("재생 중인 노래가 없습니다.", ephemeral=True)
 
