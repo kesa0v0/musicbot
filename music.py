@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 # yt-dlp와 FFmpeg 옵션 설정
 YDL_OPTS = {
-    'format': 'bestaudio[protocol^=http]/best[protocol^=http]',
+    'format': 'bestaudio[ext=m4a]/bestaudio/best',
     'quiet': True,
     'noplaylist': True,
     'source_address': '0.0.0.0', # Force IPv4
@@ -106,6 +106,7 @@ class MusicCog(discord.Cog):
     async def _prepare_song(self, song: dict) -> bool:
         """
         노래 딕셔너리를 받아 스트림 URL을 추출하고 딕셔너리를 직접 업데이트합니다.
+        HLS 스트림은 제외하여 안정성을 확보합니다.
         성공 시 True, 실패 시 False를 반환합니다.
         """
         if song.get('prepared', False):
@@ -116,17 +117,25 @@ class MusicCog(discord.Cog):
             with youtube_dl.YoutubeDL(YDL_OPTS) as ydl:
                 info = await self.bot.loop.run_in_executor(None, functools.partial(ydl.extract_info, song['webpage_url'], download=False))
             
-            audio_formats = sorted([f for f in info['formats'] if f.get('acodec') != 'none' and f.get('url')], key=lambda x: 0 if x.get('abr') is None else x.get('abr'), reverse=True)
+            # HLS 스트림을 명시적으로 제외하고, URL이 있는 오디오 포맷만 필터링
+            filtered_formats = []
+            for f in info.get('formats', []):
+                if f.get('acodec') != 'none' and f.get('url') and 'hls' not in f.get('protocol', ' '):
+                    filtered_formats.append(f)
 
-            if audio_formats:
-                song['stream_url'] = audio_formats[0]['url']
-                song['prepared'] = True
-                logger.info(f"[prepare_song] Success for: {song['title']}")
-                return True
-            else:
-                logger.error(f"[prepare_song] No suitable audio stream found for: {song['title']}")
+            if not filtered_formats:
+                logger.error(f"[prepare_song] No suitable non-HLS audio stream found for: {song['title']}")
                 song['prepared'] = False
                 return False
+
+            # 오디오 비트레이트(abr)가 높은 순으로 정렬
+            filtered_formats.sort(key=lambda f: f.get('abr', 0), reverse=True)
+            
+            song['stream_url'] = filtered_formats[0]['url']
+            song['prepared'] = True
+            logger.info(f"[prepare_song] Success for: {song['title']} (Format: {filtered_formats[0].get('format_id')})")
+            return True
+
         except Exception as e:
             logger.error(f"[prepare_song] Failed for {song['title']}: {e}")
             song['prepared'] = False
@@ -262,7 +271,6 @@ class MusicCog(discord.Cog):
 
     @discord.slash_command(description="노래를 재생하거나 큐에 추가합니다.")
     async def play(self, ctx, query: str):
-        logger.info(f"[play] Received query: {query}")
         await ctx.defer()
         state = self._get_state(ctx.guild.id)
 
