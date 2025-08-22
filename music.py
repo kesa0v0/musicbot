@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 # yt-dlp와 FFmpeg 옵션 설정
 YDL_OPTS = {
-    'format': 'bestaudio[ext=m4a]/bestaudio/best',
+    'format': 'bestaudio[protocol^=http]/best[protocol^=http]',
     'quiet': True,
     'noplaylist': True,
     'source_address': '0.0.0.0', # Force IPv4
