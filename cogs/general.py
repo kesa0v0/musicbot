@@ -22,7 +22,8 @@ class GeneralCog(commands.Cog):
     async def help_command(
         self,
         ctx: discord.ApplicationContext,
-        category: str | None = discord.Option(
+        category: discord.Option(
+            input_type=str,
             name="category",
             description="자세한 도움말을 보고 싶은 카테고리를 선택하세요.",
             autocomplete=discord.utils.basic_autocomplete(get_command_categories),
