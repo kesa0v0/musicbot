@@ -1,18 +1,19 @@
 import discord
 from discord.ext import commands
 
+# 자동 완성 핸들러는 self를 인자로 받지 않는 독립 함수여야 합니다.
+async def get_command_categories(ctx: discord.AutocompleteContext):
+    """/help 명령어의 category 옵션에 대한 자동완성 목록을 생성합니다."""
+    # 숨기고 싶은 Cog가 있다면 여기에 이름을 추가하세요.
+    hidden_cogs = [] 
+    # ctx.bot을 통해 현재 봇의 Cog 목록에 접근합니다.
+    return [cog for cog in ctx.bot.cogs.keys() if cog not in hidden_cogs]
+
 
 class GeneralCog(commands.Cog):
     """봇의 일반적인 명령어를 포함하는 Cog입니다."""
     def __init__(self, bot):
         self.bot = bot
-
-    async def get_command_categories(self, ctx: discord.AutocompleteContext):
-        """/help 명령어의 category 옵션에 대한 자동완성 목록을 생성합니다."""
-        # 숨기고 싶은 Cog가 있다면 여기에 이름을 추가하세요.
-        hidden_cogs = [] 
-        # self.bot을 통해 현재 봇의 Cog 목록에 접근합니다.
-        return [cog for cog in self.bot.cogs.keys() if cog not in hidden_cogs]
 
     @commands.slash_command(
         name="help",
@@ -21,8 +22,7 @@ class GeneralCog(commands.Cog):
     async def help_command(
         self,
         ctx: discord.ApplicationContext,
-        category: discord.Option(
-            str,
+        category: str | None = discord.Option(
             name="category",
             description="자세한 도움말을 보고 싶은 카테고리를 선택하세요.",
             autocomplete=discord.utils.basic_autocomplete(get_command_categories),
