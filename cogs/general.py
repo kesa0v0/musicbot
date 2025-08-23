@@ -1,29 +1,31 @@
 import discord
-from discord.commands import SlashCommandGroup
 from discord.ext import commands
+
+# 자동 완성 핸들러를 클래스 밖으로 분리하여 안정성을 높입니다.
+async def get_command_categories(ctx: discord.AutocompleteContext):
+    """/help 명령어의 category 옵션에 대한 자동완성 목록을 생성합니다."""
+    # 숨기고 싶은 Cog가 있다면 여기에 이름을 추가하세요.
+    hidden_cogs = [] 
+    # ctx.bot을 통해 현재 봇의 Cog 목록에 접근합니다.
+    return [cog for cog in ctx.bot.cogs.keys() if cog not in hidden_cogs]
+
 
 class GeneralCog(commands.Cog):
     """봇의 일반적인 명령어를 포함하는 Cog입니다."""
     def __init__(self, bot):
         self.bot = bot
 
-    async def get_command_categories(self, ctx: discord.AutocompleteContext):
-        """/help 명령어에서 사용할 자동완성 목록을 생성합니다."""
-        # 숨기고 싶은 Cog가 있다면 여기에 이름을 추가하세요. (예: 'OwnerCog')
-        hidden_cogs = [] 
-        return [cog for cog in self.bot.cogs.keys() if cog not in hidden_cogs]
-
     @commands.slash_command(
         name="help",
         description="봇의 명령어 도움말을 보여줍니다."
     )
     async def help_command(
-        self,
+        self, 
         ctx: discord.ApplicationContext,
         category: str | None = discord.Option(
             name="category",
             description="자세한 도움말을 보고 싶은 카테고리를 선택하세요.",
-            autocomplete=get_command_categories,
+            autocomplete=get_command_categories, # 클래스 밖의 함수를 참조
             required=False,
             default=None
         )
@@ -39,13 +41,10 @@ class GeneralCog(commands.Cog):
                 color=discord.Color.blue()
             )
             
-            # 각 Cog의 설명을 가져와 필드로 추가
             for cog_name, cog in self.bot.cogs.items():
-                # 숨기고 싶은 Cog는 건너뜁니다.
                 if cog_name in getattr(self, 'hidden_cogs', []):
                     continue
                 
-                # Cog에 설명이 있다면(__doc__) 가져오고, 없다면 기본 텍스트를 사용합니다.
                 docstring = cog.__doc__ or "설명이 없습니다."
                 embed.add_field(name=f"**{cog_name}**", value=docstring, inline=False)
             
@@ -64,10 +63,9 @@ class GeneralCog(commands.Cog):
             color=discord.Color.green()
         )
 
-        # 해당 Cog에 속한 모든 슬래시 명령어를 가져옵니다.
+        # 봇의 전체 명령어 목록에서 현재 Cog에 해당하는 명령어만 필터링
         commands_list = [cmd for cmd in self.bot.application_commands if cmd.cog == target_cog]
         for cmd in commands_list:
-            # 파라미터 목록을 생성합니다. <>는 필수, []는 선택을 의미합니다.
             params_list = []
             for option in cmd.options:
                 if option.required:
@@ -77,7 +75,6 @@ class GeneralCog(commands.Cog):
             
             params_str = " ".join(params_list)
             
-            # 명령어 이름, 파라미터, 설명을 필드로 추가합니다.
             field_name = f"`/{cmd.name} {params_str}`".strip()
             field_value = cmd.description or "설명이 없습니다."
             embed.add_field(name=field_name, value=field_value, inline=False)
