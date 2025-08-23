@@ -7,6 +7,7 @@ async def get_command_categories(ctx: discord.AutocompleteContext):
     # 숨기고 싶은 Cog가 있다면 여기에 이름을 추가하세요.
     hidden_cogs = [] 
     # ctx.bot을 통해 현재 봇의 Cog 목록에 접근합니다.
+    print(ctx.bot.cogs.keys())
     return [cog for cog in ctx.bot.cogs.keys() if cog not in hidden_cogs]
 
 
