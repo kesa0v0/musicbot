@@ -20,7 +20,13 @@ bot = discord.Bot()
 async def on_ready():
     logging.info(f'Logged in as {bot.user}')
 
-from music import MusicCog
-bot.add_cog(MusicCog(bot))
+# Cogs 로딩: cogs 폴더에 있는 모든 .py 파일을 자동으로 로드합니다.
+for filename in os.listdir('./cogs'):
+    if filename.endswith('.py'):
+        try:
+            bot.load_extension(f'cogs.{filename[:-3]}')
+            logging.info(f'Successfully loaded cog: {filename}')
+        except Exception as e:
+            logging.error(f'Failed to load cog: {filename}', exc_info=True)
 
 bot.run(DISCORD_TOKEN)
