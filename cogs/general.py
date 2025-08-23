@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 
+
 class GeneralCog(commands.Cog):
     """봇의 일반적인 명령어를 포함하는 Cog입니다."""
     def __init__(self, bot):
@@ -20,7 +21,8 @@ class GeneralCog(commands.Cog):
     async def help_command(
         self,
         ctx: discord.ApplicationContext,
-        category: str | None = discord.Option(
+        category: discord.Option(
+            str,
             name="category",
             description="자세한 도움말을 보고 싶은 카테고리를 선택하세요.",
             autocomplete=discord.utils.basic_autocomplete(get_command_categories),
