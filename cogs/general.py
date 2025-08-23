@@ -15,7 +15,7 @@ class GeneralCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @commands.slash_command(
+    @discord.slash_command(
         name="help",
         description="봇의 명령어 도움말을 보여줍니다."
     )
