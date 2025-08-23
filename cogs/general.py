@@ -1,31 +1,29 @@
 import discord
 from discord.ext import commands
 
-# 자동 완성 핸들러를 클래스 밖으로 분리하여 안정성을 높입니다.
-async def get_command_categories(ctx: discord.AutocompleteContext):
-    """/help 명령어의 category 옵션에 대한 자동완성 목록을 생성합니다."""
-    # 숨기고 싶은 Cog가 있다면 여기에 이름을 추가하세요.
-    hidden_cogs = [] 
-    # ctx.bot을 통해 현재 봇의 Cog 목록에 접근합니다.
-    return [cog for cog in ctx.bot.cogs.keys() if cog not in hidden_cogs]
-
-
 class GeneralCog(commands.Cog):
     """봇의 일반적인 명령어를 포함하는 Cog입니다."""
     def __init__(self, bot):
         self.bot = bot
+
+    async def get_command_categories(self, ctx: discord.AutocompleteContext):
+        """/help 명령어의 category 옵션에 대한 자동완성 목록을 생성합니다."""
+        # 숨기고 싶은 Cog가 있다면 여기에 이름을 추가하세요.
+        hidden_cogs = [] 
+        # self.bot을 통해 현재 봇의 Cog 목록에 접근합니다.
+        return [cog for cog in self.bot.cogs.keys() if cog not in hidden_cogs]
 
     @commands.slash_command(
         name="help",
         description="봇의 명령어 도움말을 보여줍니다."
     )
     async def help_command(
-        self, 
+        self,
         ctx: discord.ApplicationContext,
         category: str | None = discord.Option(
             name="category",
             description="자세한 도움말을 보고 싶은 카테고리를 선택하세요.",
-            autocomplete=get_command_categories, # 클래스 밖의 함수를 참조
+            autocomplete=discord.utils.basic_autocomplete(get_command_categories),
             required=False,
             default=None
         )
@@ -69,9 +67,9 @@ class GeneralCog(commands.Cog):
             params_list = []
             for option in cmd.options:
                 if option.required:
-                    params_list.append(f"<{option.name}>")
+                    params_list.append(f"<{{option.name}}>")
                 else:
-                    params_list.append(f"[{option.name}]")
+                    params_list.append(f"[{{option.name}}]")
             
             params_str = " ".join(params_list)
             
