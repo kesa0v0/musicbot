@@ -65,7 +65,7 @@ class GeneralCog(commands.Cog):
         )
 
         # 해당 Cog에 속한 모든 슬래시 명령어를 가져옵니다.
-        commands_list = target_cog.get_application_commands()
+        commands_list = [cmd for cmd in self.bot.application_commands if cmd.cog == target_cog]
         for cmd in commands_list:
             # 파라미터 목록을 생성합니다. <>는 필수, []는 선택을 의미합니다.
             params_list = []
