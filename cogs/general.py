@@ -69,9 +69,9 @@ class GeneralCog(commands.Cog):
             params_list = []
             for option in cmd.options:
                 if option.required:
-                    params_list.append(f"<{{option.name}}>")
+                    params_list.append(f"<{option.name}>")
                 else:
-                    params_list.append(f"[{{option.name}}]")
+                    params_list.append(f"[{option.name}]")
             
             params_str = " ".join(params_list)
             
