@@ -240,20 +240,39 @@ class MusicCog(discord.Cog):
         if len(state.queue) >= QUEUE_LIMIT:
             await ctx.followup.send(f'큐가 가득 찼습니다! (최대 {QUEUE_LIMIT}곡)')
             return
-        if not ctx.voice_client:
+        voice_client = ctx.voice_client
+        # Check if the bot is in a voice channel and if it's connected.
+        if voice_client and voice_client.is_connected():
+            # If the user is in a different channel, move the bot.
+            if ctx.author.voice and ctx.author.voice.channel != voice_client.channel:
+                logger.info(f"Moving to user's channel: {ctx.author.voice.channel.name}")
+                await voice_client.move_to(ctx.author.voice.channel)
+        else:
+            # The bot is not connected to any voice channel in this guild.
             if ctx.author.voice:
+                # If there's a lingering, broken client, disconnect it first.
+                if voice_client:
+                    logger.warning(f"Found a lingering, disconnected voice client in {ctx.guild.name}. Cleaning up.")
+                    try:
+                        await voice_client.disconnect(force=True)
+                    except Exception as e:
+                        logger.error(f"Error force-disconnecting lingering client: {e}")
+
+                # Now, connect to the user's channel.
                 try:
-                    await ctx.author.voice.channel.connect(timeout=15.0) # 15초 타임아웃 설정
+                    logger.info(f"Connecting to voice channel: {ctx.author.voice.channel.name}")
+                    await ctx.author.voice.channel.connect(timeout=15.0)
                 except (discord.errors.ConnectionClosed, asyncio.TimeoutError) as e:
-                    logger.error(f"[voice_connect] Failed to connect to voice channel in {ctx.guild.name}: {e}")
-                    await ctx.followup.send("음성 채널 연결에 실패했습니다. 잠시 후 다시 시도해주세요.")
-                    if ctx.guild.id in self.states: del self.states[ctx.guild.id]
+                    logger.error(f"[voice_connect] Known error connecting to voice in {ctx.guild.name}: {e}")
+                    await ctx.followup.send("음성 채널 연결에 실패했습니다. Discord 서버 상태에 문제가 있을 수 있습니다. 잠시 후 다시 시도해주세요.")
+                    if ctx.guild.id in self.states:
+                        del self.states[ctx.guild.id]
                     return
                 except Exception as e:
-                    logger.error(f"[voice_connect] An unexpected error occurred when connecting to voice in {ctx.guild.name}: {e}")
-                    await ctx.followup.send("알 수 없는 오류로 음성 채널에 연결할 수 없습니다.")
-                    if ctx.guild.id in self.states: del self.states[ctx.guild.id]
-                    return
+                    # This will be caught by the global error handler, but logging it here gives more context.
+                    logger.error(f"[voice_connect] Unexpected error connecting to voice in {ctx.guild.name}: {e}", exc_info=True)
+                    # Re-raise to be caught by the global handler, which will notify the user.
+                    raise e
             else:
                 await ctx.followup.send("음성 채널에 먼저 참여해주세요.")
                 return
@@ -290,20 +309,39 @@ class MusicCog(discord.Cog):
             try:
                 await ctx.channel.send("자동재생 목록을 지웠습니다. 요청하신 재생목록을 우선 추가합니다.", delete_after=10)
             except (discord.Forbidden, discord.NotFound): pass
-        if not ctx.voice_client:
+        voice_client = ctx.voice_client
+        # Check if the bot is in a voice channel and if it's connected.
+        if voice_client and voice_client.is_connected():
+            # If the user is in a different channel, move the bot.
+            if ctx.author.voice and ctx.author.voice.channel != voice_client.channel:
+                logger.info(f"Moving to user's channel: {ctx.author.voice.channel.name}")
+                await voice_client.move_to(ctx.author.voice.channel)
+        else:
+            # The bot is not connected to any voice channel in this guild.
             if ctx.author.voice:
+                # If there's a lingering, broken client, disconnect it first.
+                if voice_client:
+                    logger.warning(f"Found a lingering, disconnected voice client in {ctx.guild.name}. Cleaning up.")
+                    try:
+                        await voice_client.disconnect(force=True)
+                    except Exception as e:
+                        logger.error(f"Error force-disconnecting lingering client: {e}")
+
+                # Now, connect to the user's channel.
                 try:
+                    logger.info(f"Connecting to voice channel: {ctx.author.voice.channel.name}")
                     await ctx.author.voice.channel.connect(timeout=15.0)
                 except (discord.errors.ConnectionClosed, asyncio.TimeoutError) as e:
-                    logger.error(f"[voice_connect] Failed to connect to voice channel in {ctx.guild.name}: {e}")
-                    await ctx.followup.send("음성 채널 연결에 실패했습니다. 잠시 후 다시 시도해주세요.")
-                    if ctx.guild.id in self.states: del self.states[ctx.guild.id]
+                    logger.error(f"[voice_connect] Known error connecting to voice in {ctx.guild.name}: {e}")
+                    await ctx.followup.send("음성 채널 연결에 실패했습니다. Discord 서버 상태에 문제가 있을 수 있습니다. 잠시 후 다시 시도해주세요.")
+                    if ctx.guild.id in self.states:
+                        del self.states[ctx.guild.id]
                     return
                 except Exception as e:
-                    logger.error(f"[voice_connect] An unexpected error occurred when connecting to voice in {ctx.guild.name}: {e}")
-                    await ctx.followup.send("알 수 없는 오류로 음성 채널에 연결할 수 없습니다.")
-                    if ctx.guild.id in self.states: del self.states[ctx.guild.id]
-                    return
+                    # This will be caught by the global error handler, but logging it here gives more context.
+                    logger.error(f"[voice_connect] Unexpected error connecting to voice in {ctx.guild.name}: {e}", exc_info=True)
+                    # Re-raise to be caught by the global handler, which will notify the user.
+                    raise e
             else:
                 await ctx.followup.send("음성 채널에 먼저 참여해주세요.")
                 return
