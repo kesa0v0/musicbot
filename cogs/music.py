@@ -43,6 +43,7 @@ class SongSelectionView(discord.ui.View):
         self.entries = entries
         self.selected_entry = None
         self.original_ctx = original_ctx
+        self.message = None
 
         # 버튼 추가
         for i, entry in enumerate(entries):
@@ -56,33 +57,47 @@ class SongSelectionView(discord.ui.View):
         self.add_item(cancel_button)
 
     async def on_timeout(self):
-        for item in self.children:
-            item.disabled = True
-        if self.message:
-            await self.message.edit(content="곡 선택 시간이 초과되었습니다.", view=self)
-        self.stop()
+        try:
+            for item in self.children:
+                item.disabled = True
+            if self.message:
+                await self.message.edit(content="곡 선택 시간이 초과되었습니다.", view=self)
+        except discord.NotFound:
+            pass # 메시지가 이미 삭제된 경우
+        except Exception as e:
+            logger.error(f"[view_timeout] Error disabling view: {e}")
+        finally:
+            self.stop()
 
     def create_callback(self, entry):
         async def callback(interaction: discord.Interaction):
-            if interaction.user != self.original_ctx.author:
-                await interaction.response.send_message("이 버튼은 당신을 위한 것이 아닙니다.", ephemeral=True)
-                return
-            self.selected_entry = entry
-            for item in self.children:
-                item.disabled = True
-            await interaction.response.edit_message(content=f"'{entry.get('title', 'Unknown Title')}'을(를) 선택했습니다.", view=self)
-            self.stop()
+            try:
+                if interaction.user != self.original_ctx.author:
+                    await interaction.response.send_message("이 버튼은 당신을 위한 것이 아닙니다.", ephemeral=True)
+                    return
+                self.selected_entry = entry
+                for item in self.children:
+                    item.disabled = True
+                await interaction.response.edit_message(content=f"'{entry.get('title', 'Unknown Title')}'을(를) 선택했습니다.", view=self)
+            except Exception as e:
+                logger.error(f"[view_callback] Error in selection callback: {e}")
+            finally:
+                self.stop()
         return callback
 
     async def cancel_callback(self, interaction: discord.Interaction):
-        if interaction.user != self.original_ctx.author:
-            await interaction.response.send_message("이 버튼은 당신을 위한 것이 아닙니다.", ephemeral=True)
-            return
-        self.selected_entry = None # 선택 취소
-        for item in self.children:
-            item.disabled = True
-        await interaction.response.edit_message(content="곡 선택이 취소되었습니다.", view=self)
-        self.stop()
+        try:
+            if interaction.user != self.original_ctx.author:
+                await interaction.response.send_message("이 버튼은 당신을 위한 것이 아닙니다.", ephemeral=True)
+                return
+            self.selected_entry = None # 선택 취소
+            for item in self.children:
+                item.disabled = True
+            await interaction.response.edit_message(content="곡 선택이 취소되었습니다.", view=self)
+        except Exception as e:
+            logger.error(f"[view_cancel] Error in cancel callback: {e}")
+        finally:
+            self.stop()
 
 class MusicCog(discord.Cog):
     """음악 기능 관련 모든 로직을 담는 Cog 클래스"""
@@ -97,6 +112,23 @@ class MusicCog(discord.Cog):
             f"Command='/{ctx.command.name}' Options={ctx.options}"
         )
 
+    async def cog_command_error(self, ctx: discord.ApplicationContext, error: Exception):
+        """명령어 실행 중 발생한 예외를 전역적으로 처리하는 핸들러."""
+        # 원본 에러가 discord.ApplicationCommandInvokeError인 경우, 실제 원인 에러를 추출합니다.
+        if isinstance(error, discord.ApplicationCommandInvokeError):
+            error = error.original
+
+        logger.error(f"[GLOBAL_ERROR] Guild='{ctx.guild.name}' Command='/{ctx.command.name}' Error: {error}", exc_info=True)
+        try:
+            # 이미 응답(defer 포함)이 보내졌는지 확인합니다.
+            if not ctx.response.is_done():
+                await ctx.respond("명령어 실행 중 알 수 없는 오류가 발생했습니다. 개발자에게 문의해주세요.", ephemeral=True)
+            else:
+                await ctx.followup.send("명령어 실행 중 알 수 없는 오류가 발생했습니다. 개발자에게 문의해주세요.", ephemeral=True)
+        except (discord.Forbidden, discord.NotFound):
+            logger.warning(f"[GLOBAL_ERROR] Could not send error message to Guild='{ctx.guild.name}'.")
+            pass # 오류 메시지 전송조차 실패한 경우
+
     def _get_state(self, guild_id) -> GuildState:
         """해당 길드의 상태 객체를 가져오거나 새로 생성합니다."""
         if guild_id not in self.states:
@@ -104,256 +136,194 @@ class MusicCog(discord.Cog):
         return self.states[guild_id]
 
     async def _prepare_song(self, song: dict) -> bool:
-        """
-        노래 딕셔너리를 받아 스트림 URL을 추출하고 딕셔너리를 직접 업데이트합니다.
-        HLS 스트림은 제외하여 안정성을 확보합니다.
-        성공 시 True, 실패 시 False를 반환합니다.
-        """
         if song.get('prepared', False):
             return True
-
         logger.info(f"[prepare_song] Starting for: {song['title']}")
         try:
             with youtube_dl.YoutubeDL(YDL_OPTS) as ydl:
                 info = await self.bot.loop.run_in_executor(None, functools.partial(ydl.extract_info, song['webpage_url'], download=False))
-            
-            # HLS 스트림을 명시적으로 제외하고, URL이 있는 오디오 포맷만 필터링
-            filtered_formats = []
-            for f in info.get('formats', []):
-                if f.get('acodec') != 'none' and f.get('url') and 'hls' not in f.get('protocol', ''):
-                    filtered_formats.append(f)
-
+            filtered_formats = [f for f in info.get('formats', []) if f.get('acodec') != 'none' and f.get('url') and 'hls' not in f.get('protocol', '')]
             if not filtered_formats:
                 logger.error(f"[prepare_song] No suitable non-HLS audio stream found for: {song['title']}")
                 song['prepared'] = False
                 return False
-
-            # 오디오 비트레이트(abr)가 None인 경우를 안전하게 처리하며 높은 순으로 정렬
             filtered_formats.sort(key=lambda f: f.get('abr') or 0, reverse=True)
-            
             song['stream_url'] = filtered_formats[0]['url']
             song['prepared'] = True
             logger.info(f"[prepare_song] Success for: {song['title']} (Format: {filtered_formats[0].get('format_id')})")
             return True
-
         except Exception as e:
             logger.error(f"[prepare_song] Failed for {song['title']}: {e}")
             song['prepared'] = False
             return False
 
     async def _add_autoplay_song(self, state: GuildState, ctx):
-        """큐가 비었을 때 자동재생 곡을 찾아 큐에 추가합니다."""
-        if not state.autoplay_enabled or not state.current_song:
-            return
-
+        if not state.autoplay_enabled or not state.current_song: return
         logger.info(f"[autoplay] Triggered. Finding recommendation based on: {state.current_song['title']}")
-        last_url = state.current_song['webpage_url']
-        match = re.search(r"v=([\w-]+)", last_url)
-        video_id = match.group(1) if match else None
-
-        if not video_id:
-            return
-
+        match = re.search(r"v=([\w-]+)", state.current_song['webpage_url'])
+        if not match: return
+        video_id = match.group(1)
         try:
-            related_videos = await self.bot.loop.run_in_executor(
-                None, functools.partial(get_related_videos, video_id, max_results=10)
-            )
-            if not related_videos:
-                return
-
+            related_videos = await self.bot.loop.run_in_executor(None, functools.partial(get_related_videos, video_id, max_results=10))
+            if not related_videos: return
             current_queue_ids = {re.search(r"v=([\w-]+)", s['webpage_url']).group(1) for s in state.queue if re.search(r"v=([\w-]+)", s['webpage_url'])}
             played_history_ids = set(state.played_history)
-            
-            filtered_videos = [
-                v for v in related_videos 
-                if v.get('id') and v['id'] not in current_queue_ids and v['id'] not in played_history_ids
-            ]
-
+            filtered_videos = [v for v in related_videos if v.get('id') and v['id'] not in current_queue_ids and v['id'] not in played_history_ids]
             if filtered_videos:
                 video_info = random.choice(filtered_videos)
                 video_id = video_info.get('id')
                 title = video_info.get('title', 'Unknown Title')
                 url = f"https://www.youtube.com/watch?v={video_id}"
-                
                 state.queue.append({'webpage_url': url, 'title': title, 'ctx': ctx, 'added_by': 'autoplay', 'prepared': False})
                 logger.info(f"[autoplay] Added '{title}' to queue.")
-
         except Exception as e:
             logger.error(f"[autoplay] Failed to add song: {e}")
 
     async def _play_next(self, ctx):
-        """재생 로직의 중심. 큐의 다음 곡을 재생하고, 없으면 자동재생을 시도합니다."""
         state = self._get_state(ctx.guild.id)
-        
-        async with state.play_lock: # Lock을 사용하여 동시 접근 방지
+        async with state.play_lock:
             voice_client = ctx.voice_client
-
             if not voice_client or not voice_client.is_connected():
                 state.is_playing = False
                 return
-
-            # 1. 다음 곡 가져오기 (큐가 비었으면 자동재생 시도)
             if not state.queue:
                 await self._add_autoplay_song(state, ctx)
-                if not state.queue: # 자동재생으로도 추가 못했으면 종료
+                if not state.queue:
                     logger.info(f"[_play_next] Stopping playback as queue is empty.")
                     state.is_playing = False
                     state.current_song = None
                     return
-
             next_song = state.queue.popleft()
-
-            # 2. 스트림 URL 준비 (Just-in-Time)
             if not next_song.get('prepared', False):
                 logger.info(f"[_play_next] Song not prepared. Preparing now: {next_song['title']}")
                 if not await self._prepare_song(next_song):
-                    await ctx.channel.send(f"'{next_song['title']}'을(를) 재생할 수 없어 건너뜁니다.")
-                    # Lock을 해제하기 전에 다음 호출을 예약해야 함
+                    try:
+                        await ctx.channel.send(f"'{next_song['title']}'을(를) 재생할 수 없어 건너뜁니다.")
+                    except (discord.Forbidden, discord.NotFound): pass
                     self.bot.loop.create_task(self._play_next(ctx))
                     return
-            
             play_url = next_song['stream_url']
             state.is_playing = True
             state.current_song = next_song
-
-            # 3. 재생 후 실행될 콜백 함수 정의
             def after_playing(error):
-                if error:
-                    logger.error(f"[_play_next:after] Playback error for {next_song['title']}: {error}")
-                
+                if error: logger.error(f"[_play_next:after] Playback error for {next_song['title']}: {error}")
                 match = re.search(r"v=([\w-]+)", next_song['webpage_url'])
-                if match:
-                    state.played_history.append(match.group(1))
-
-                if state.loop_mode == "current":
-                    state.queue.appendleft(next_song)
-                elif state.loop_mode == "queue":
-                    state.queue.append(next_song)
-
+                if match: state.played_history.append(match.group(1))
+                if state.loop_mode == "current": state.queue.appendleft(next_song)
+                elif state.loop_mode == "queue": state.queue.append(next_song)
                 self.bot.loop.create_task(self._play_next(ctx))
-
-            # 4. 재생 시작
             try:
                 source = discord.FFmpegPCMAudio(play_url, **FFMPEG_OPTS)
                 voice_client.play(source, after=after_playing)
-                await ctx.channel.send(f'Now playing: {next_song["title"]}\n' +
-                                        f'URL: <{next_song["webpage_url"]}>')
-
-                # 5. 다음 곡 미리 준비 (Hybrid Prefetch)
-                if state.queue:
-                    # 큐에 다음 곡이 있으면 미리 로딩
-                    self.bot.loop.create_task(self._prepare_song(state.queue[0]))
-                elif state.autoplay_enabled:
-                    # 큐가 비어있고 자동재생이 켜져있으면, 다음 추천곡을 미리 검색하여 큐에 추가
-                    self.bot.loop.create_task(self._add_autoplay_song(state, ctx))
-
+                try:
+                    await ctx.channel.send(f'Now playing: {next_song["title"]}\nURL: <{next_song["webpage_url"]}>')
+                except (discord.Forbidden, discord.NotFound): pass
+                if state.queue: self.bot.loop.create_task(self._prepare_song(state.queue[0]))
+                elif state.autoplay_enabled: self.bot.loop.create_task(self._add_autoplay_song(state, ctx))
             except Exception as e:
                 logger.error(f"[_play_next] Critical error for {next_song['title']}: {e}")
-                await ctx.channel.send(f"'{next_song['title']}' 재생 중 심각한 오류가 발생했습니다.")
+                try:
+                    await ctx.channel.send(f"'{next_song['title']}' 재생 중 심각한 오류가 발생했습니다.")
+                except (discord.Forbidden, discord.NotFound): pass
                 self.bot.loop.create_task(self._play_next(ctx))
 
     @discord.slash_command(description="노래를 재생하거나 큐에 추가합니다.")
     async def play(self, ctx, query: str):
         await ctx.defer()
         state = self._get_state(ctx.guild.id)
-
         if any(song.get('added_by') == 'autoplay' for song in state.queue):
             state.queue = deque(song for song in state.queue if song.get('added_by') != 'autoplay')
             logger.info(f"[play] User interrupted autoplay. Clearing autoplay songs.")
-            await ctx.channel.send("자동재생 목록을 지웠습니다. 요청하신 곡을 우선 재생합니다.", delete_after=10)
-
-        try:
-            if len(state.queue) >= QUEUE_LIMIT:
-                await ctx.followup.send(f'큐가 가득 찼습니다! (최대 {QUEUE_LIMIT}곡)')
-                return
-
-            if not ctx.voice_client:
-                if ctx.author.voice:
-                    await ctx.author.voice.channel.connect()
-                else:
-                    await ctx.followup.send("음성 채널에 먼저 참여해주세요.")
+            try:
+                await ctx.channel.send("자동재생 목록을 지웠습니다. 요청하신 곡을 우선 재생합니다.", delete_after=10)
+            except (discord.Forbidden, discord.NotFound): pass
+        if len(state.queue) >= QUEUE_LIMIT:
+            await ctx.followup.send(f'큐가 가득 찼습니다! (최대 {QUEUE_LIMIT}곡)')
+            return
+        if not ctx.voice_client:
+            if ctx.author.voice:
+                try:
+                    await ctx.author.voice.channel.connect(timeout=15.0) # 15초 타임아웃 설정
+                except (discord.errors.ConnectionClosed, asyncio.TimeoutError) as e:
+                    logger.error(f"[voice_connect] Failed to connect to voice channel in {ctx.guild.name}: {e}")
+                    await ctx.followup.send("음성 채널 연결에 실패했습니다. 잠시 후 다시 시도해주세요.")
+                    if ctx.guild.id in self.states: del self.states[ctx.guild.id]
                     return
-
-            search_query = f"ytsearch5:{query}" if not query.startswith('http') else query
-            
-            ydl_opts = {'quiet': True, 'noplaylist': True, 'default_search': 'ytsearch', 'source_address': '0.0.0.0'}
-            with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-                info = await self.bot.loop.run_in_executor(None, functools.partial(ydl.extract_info, search_query, download=False))
-            
-            if 'entries' in info:
-                entries = [e for e in info['entries'] if e and e.get('id')][:5]
-                if not entries:
-                    await ctx.followup.send(f"'{query}'에 대한 검색 결과를 찾을 수 없습니다.")
-                    return
-
-                msg = "다음 중 재생할 곡을 선택해주세요:\n" + '\n'.join([f"{i+1}. {e.get('title', 'Unknown')}" for i, e in enumerate(entries)])
-                view = SongSelectionView(entries, ctx)
-                message = await ctx.followup.send(msg, view=view)
-                view.message = message
-                await view.wait()
-
-                selected_info = view.selected_entry
-                if not selected_info:
+                except Exception as e:
+                    logger.error(f"[voice_connect] An unexpected error occurred when connecting to voice in {ctx.guild.name}: {e}")
+                    await ctx.followup.send("알 수 없는 오류로 음성 채널에 연결할 수 없습니다.")
+                    if ctx.guild.id in self.states: del self.states[ctx.guild.id]
                     return
             else:
-                selected_info = info
-
-            title = selected_info.get('title', 'Unknown Title')
-            webpage_url = selected_info.get('webpage_url', f"https://www.youtube.com/watch?v={selected_info.get('id')}")
-
-            state.queue.append({'webpage_url': webpage_url, 'title': title, 'ctx': ctx, 'added_by': 'user', 'prepared': False})
-            await ctx.followup.send(f'큐에 추가됨: {title}')
-
-            if not state.is_playing:
-                await self._play_next(ctx)
-
-        except Exception as e:
-            logger.error(f"[play] Unexpected error: {e}")
-            await ctx.followup.send(f'오류가 발생했습니다: {e}')
+                await ctx.followup.send("음성 채널에 먼저 참여해주세요.")
+                return
+        search_query = f"ytsearch5:{query}" if not query.startswith('http') else query
+        with youtube_dl.YoutubeDL(YDL_OPTS) as ydl:
+            info = await self.bot.loop.run_in_executor(None, functools.partial(ydl.extract_info, search_query, download=False))
+        if 'entries' in info:
+            entries = [e for e in info['entries'] if e and e.get('id')][:5]
+            if not entries:
+                await ctx.followup.send(f"'{query}'에 대한 검색 결과를 찾을 수 없습니다.")
+                return
+            msg = "다음 중 재생할 곡을 선택해주세요:\n" + '\n'.join([f"{i+1}. {e.get('title', 'Unknown')}" for i, e in enumerate(entries)])
+            view = SongSelectionView(entries, ctx)
+            message = await ctx.followup.send(msg, view=view)
+            view.message = message
+            await view.wait()
+            selected_info = view.selected_entry
+            if not selected_info: return
+        else:
+            selected_info = info
+        title = selected_info.get('title', 'Unknown Title')
+        webpage_url = selected_info.get('webpage_url', f"https://www.youtube.com/watch?v={selected_info.get('id')}")
+        state.queue.append({'webpage_url': webpage_url, 'title': title, 'ctx': ctx, 'added_by': 'user', 'prepared': False})
+        await ctx.followup.send(f'큐에 추가됨: {title}')
+        if not state.is_playing:
+            await self._play_next(ctx)
 
     @discord.slash_command(description="유튜브 플레이리스트를 큐에 추가합니다.")
     async def playlist(self, ctx, url: str):
         await ctx.defer()
         state = self._get_state(ctx.guild.id)
-
         if any(song.get('added_by') == 'autoplay' for song in state.queue):
             state.queue = deque(song for song in state.queue if song.get('added_by') != 'autoplay')
-            await ctx.channel.send("자동재생 목록을 지웠습니다. 요청하신 재생목록을 우선 추가합니다.", delete_after=10)
-
-        try:
-            if not ctx.voice_client:
-                if ctx.author.voice:
-                    await ctx.author.voice.channel.connect()
-                else:
-                    await ctx.followup.send("음성 채널에 먼저 참여해주세요.")
+            try:
+                await ctx.channel.send("자동재생 목록을 지웠습니다. 요청하신 재생목록을 우선 추가합니다.", delete_after=10)
+            except (discord.Forbidden, discord.NotFound): pass
+        if not ctx.voice_client:
+            if ctx.author.voice:
+                try:
+                    await ctx.author.voice.channel.connect(timeout=15.0)
+                except (discord.errors.ConnectionClosed, asyncio.TimeoutError) as e:
+                    logger.error(f"[voice_connect] Failed to connect to voice channel in {ctx.guild.name}: {e}")
+                    await ctx.followup.send("음성 채널 연결에 실패했습니다. 잠시 후 다시 시도해주세요.")
+                    if ctx.guild.id in self.states: del self.states[ctx.guild.id]
                     return
-
-            ydl_opts = {'quiet': True, 'noplaylist': False, 'extract_flat': True, 'source_address': '0.0.0.0'}
-            with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-                info = await self.bot.loop.run_in_executor(None, functools.partial(ydl.extract_info, url, download=False))
-            
-            entries = info.get('entries')
-            if not entries:
-                await ctx.followup.send('플레이리스트를 찾을 수 없거나, 비어있습니다.')
+                except Exception as e:
+                    logger.error(f"[voice_connect] An unexpected error occurred when connecting to voice in {ctx.guild.name}: {e}")
+                    await ctx.followup.send("알 수 없는 오류로 음성 채널에 연결할 수 없습니다.")
+                    if ctx.guild.id in self.states: del self.states[ctx.guild.id]
+                    return
+            else:
+                await ctx.followup.send("음성 채널에 먼저 참여해주세요.")
                 return
-            
-            added_count = 0
-            for entry in entries:
-                if not entry or not entry.get('id'): continue
-                if len(state.queue) >= QUEUE_LIMIT: break
-                
-                title = entry.get('title', 'Unknown Title')
-                webpage_url = f"https://www.youtube.com/watch?v={entry['id']}"
-                state.queue.append({'webpage_url': webpage_url, 'title': title, 'ctx': ctx, 'added_by': 'user', 'prepared': False})
-                added_count += 1
-
-            await ctx.followup.send(f'{added_count}개의 노래를 큐에 추가했습니다.')
-            
-            if not state.is_playing and added_count > 0:
-                await self._play_next(ctx)
-        except Exception as e:
-            logger.error(f"플레이리스트 로딩 중 오류: {e}")
-            await ctx.followup.send(f'플레이리스트를 가져오는 중 오류가 발생했습니다: {e}')
+        with youtube_dl.YoutubeDL({'quiet': True, 'noplaylist': False, 'extract_flat': True, 'source_address': '0.0.0.0'}) as ydl:
+            info = await self.bot.loop.run_in_executor(None, functools.partial(ydl.extract_info, url, download=False))
+        entries = info.get('entries')
+        if not entries:
+            await ctx.followup.send('플레이리스트를 찾을 수 없거나, 비어있습니다.')
+            return
+        added_count = 0
+        for entry in entries:
+            if not entry or not entry.get('id'): continue
+            if len(state.queue) >= QUEUE_LIMIT: break
+            title = entry.get('title', 'Unknown Title')
+            webpage_url = f"https://www.youtube.com/watch?v={entry['id']}"
+            state.queue.append({'webpage_url': webpage_url, 'title': title, 'ctx': ctx, 'added_by': 'user', 'prepared': False})
+            added_count += 1
+        await ctx.followup.send(f'{added_count}개의 노래를 큐에 추가했습니다.')
+        if not state.is_playing and added_count > 0:
+            await self._play_next(ctx)
 
     @discord.slash_command(description="현재 재생 중인 노래를 건너뜁니다.")
     async def skip(self, ctx):
@@ -385,17 +355,14 @@ class MusicCog(discord.Cog):
         if not state.queue:
             await ctx.respond('큐가 비어있습니다.', ephemeral=True)
             return
-
-        msg_lines = [f'**현재 대기열:**']
+        msg_lines = ['**현재 대기열:**']
         for i, item in enumerate(state.queue, 1):
             line = f'{i}. {item["title"]}'
-            if item.get('added_by') == 'autoplay':
-                line += " (추천)"
+            if item.get('added_by') == 'autoplay': line += " (추천)"
             msg_lines.append(line)
             if i >= 15:
                 msg_lines.append(f"... 외 {len(state.queue) - 15}곡")
                 break
-        
         await ctx.respond('\n'.join(msg_lines))
 
     @discord.slash_command(description="대기열에서 특정 노래를 제거합니다.")
@@ -404,7 +371,6 @@ class MusicCog(discord.Cog):
         if not state.queue or not (1 <= position <= len(state.queue)):
             await ctx.respond("잘못된 번호입니다.", ephemeral=True)
             return
-        
         removed = state.queue[position-1]
         del state.queue[position-1]
         await ctx.respond(f'큐에서 제거됨: {removed["title"]}')
@@ -422,21 +388,27 @@ class MusicCog(discord.Cog):
     async def nowplaying(self, ctx):
         state = self._get_state(ctx.guild.id)
         if state.current_song:
-            await ctx.respond(f'현재 재생 중: {state.current_song["title"]}\n' +
-                              f'URL: <{state.current_song["webpage_url"]}>')
+            await ctx.respond(f'현재 재생 중: {state.current_song["title"]}\nURL: <{state.current_song["webpage_url"]}>')
         else:
             await ctx.respond("재생 중인 노래가 없습니다.", ephemeral=True)
 
     @discord.slash_command(description="음성 채널에서 나갑니다.")
     async def leave(self, ctx):
         state = self._get_state(ctx.guild.id)
-        if ctx.voice_client:
-            await ctx.voice_client.disconnect()
-            state.is_playing = False
-            state.current_song = None
-            if ctx.guild.id in self.states:
-                del self.states[ctx.guild.id]
-            await ctx.respond("음성 채널을 나갔습니다.")
+        voice_client = ctx.voice_client
+        
+        if voice_client and voice_client.is_connected():
+            try:
+                await voice_client.disconnect()
+                await ctx.respond("음성 채널을 나갔습니다.")
+            except Exception as e:
+                logger.error(f"[voice_disconnect] Error disconnecting from voice channel in {ctx.guild.name}: {e}")
+                await ctx.respond("음성 채널을 나가는 중 오류가 발생했습니다. 상태를 초기화합니다.", ephemeral=True)
+            finally:
+                state.is_playing = False
+                state.current_song = None
+                if ctx.guild.id in self.states:
+                    del self.states[ctx.guild.id]
         else:
             await ctx.respond("음성 채널에 연결되어 있지 않습니다.", ephemeral=True)
 
@@ -460,7 +432,6 @@ class MusicCog(discord.Cog):
         if mode not in ["off", "current", "queue"]:
             await ctx.respond("사용법: /loop off, /loop current, 또는 /loop queue", ephemeral=True)
             return
-        
         state.loop_mode = mode
         await ctx.respond(f"반복 모드가 '{mode}'(으)로 설정되었습니다.")
 
@@ -468,17 +439,21 @@ class MusicCog(discord.Cog):
     async def on_voice_state_update(self, member, before, after):
         if member.id == self.bot.user.id or before.channel == after.channel:
             return
-
         voice_client = member.guild.voice_client
         if voice_client and voice_client.is_connected():
+            # 채널에 봇만 남았는지 확인
             if len(voice_client.channel.members) == 1:
                 logger.info(f"[auto-leave] Leaving voice channel in guild {member.guild.id} due to inactivity.")
                 state = self._get_state(member.guild.id)
-                state.is_playing = False
-                state.current_song = None
-                await voice_client.disconnect()
-                if member.guild.id in self.states:
-                    del self.states[member.guild.id]
+                try:
+                    await voice_client.disconnect()
+                except Exception as e:
+                    logger.error(f"[auto-leave] Error disconnecting from voice channel in {member.guild.name}: {e}")
+                finally:
+                    state.is_playing = False
+                    state.current_song = None
+                    if member.guild.id in self.states:
+                        del self.states[member.guild.id]
 
 def setup(bot):
     bot.add_cog(MusicCog(bot))
