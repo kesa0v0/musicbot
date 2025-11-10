@@ -1,3 +1,4 @@
+from cogs import PaginationView
 import discord
 import asyncio
 import yt_dlp as youtube_dl
@@ -393,15 +394,19 @@ class MusicCog(discord.Cog):
         if not state.queue:
             await ctx.respond('큐가 비어있습니다.', ephemeral=True)
             return
-        msg_lines = ['**현재 대기열:**']
-        for i, item in enumerate(state.queue, 1):
-            line = f'{i}. {item["title"]}'
-            if item.get('added_by') == 'autoplay': line += " (추천)"
-            msg_lines.append(line)
-            if i >= 15:
-                msg_lines.append(f"... 외 {len(state.queue) - 15}곡")
-                break
-        await ctx.respond('\n'.join(msg_lines))
+        # View에 데이터를 넘겨주기 위해 deque를 list로 변환
+        queue_list = list(state.queue)
+
+        # 페이지네이션 View 인스턴스 생성
+        # (한 페이지에 10개씩, 원본 명령어 사용자만 조작 가능)
+        view = PaginationView(data=queue_list, original_author=ctx.author, items_per_page=10)
+        
+        # 첫 페이지의 임베드 생성
+        initial_embed = view.create_embed()
+
+        # 메시지를 전송하고, 전송된 메시지 객체를 view에 저장 (타임아웃 시 편집 위함)
+        await ctx.respond(embed=initial_embed, view=view)
+        view.message = await ctx.original_response()
 
     @discord.slash_command(description="대기열에서 특정 노래를 제거합니다.")
     async def remove(self, ctx, position: int):
