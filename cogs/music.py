@@ -1,4 +1,4 @@
-from cogs import PaginationView
+from ui import PaginationView
 import discord
 import asyncio
 import yt_dlp as youtube_dl
