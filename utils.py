@@ -10,7 +10,8 @@ def get_related_videos(video_id, max_results=5):
         ydl_opts = {
             'quiet': True,
             'extract_flat': True,
-            'source_address': '0.0.0.0'  # Force IPv4 to potentially fix SSL errors
+            'source_address': '0.0.0.0',  # Force IPv4 to potentially fix SSL errors
+            'cookiefile': './cookies.txt',
         }
         with youtube_dl.YoutubeDL(ydl_opts) as ydl:
             mix_url = f"https://www.youtube.com/watch?v={video_id}&list=RD{video_id}"

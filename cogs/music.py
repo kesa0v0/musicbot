@@ -19,6 +19,7 @@ YDL_OPTS = {
     'quiet': True,
     'noplaylist': True,
     'source_address': '0.0.0.0', # Force IPv4
+    'cookiefile': './cookies.txt',
 }
 FFMPEG_OPTS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 8M -probesize 32M',
@@ -346,7 +347,7 @@ class MusicCog(discord.Cog):
             else:
                 await ctx.followup.send("음성 채널에 먼저 참여해주세요.")
                 return
-        with youtube_dl.YoutubeDL({'quiet': True, 'noplaylist': False, 'extract_flat': True, 'source_address': '0.0.0.0'}) as ydl:
+        with youtube_dl.YoutubeDL({'quiet': True, 'noplaylist': False, 'extract_flat': True, 'source_address': '0.0.0.0', 'cookiefile': './cookies.txt',}) as ydl:
             info = await self.bot.loop.run_in_executor(None, functools.partial(ydl.extract_info, url, download=False))
         entries = info.get('entries')
         if not entries:
