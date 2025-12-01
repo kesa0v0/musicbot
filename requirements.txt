@@ -1,4 +1,6 @@
 python-dotenv
-py-cord[voice]
+# Discord가 음성 암호화 모드(aead_xchacha20_poly1305_*)로 전환됨에 따라
+# 해당 모드를 지원하는 py-cord 2.6.1+가 필요합니다.
+py-cord[voice]>=2.6.1
 PyNaCl
 yt-dlp
