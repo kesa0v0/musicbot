@@ -18,7 +18,14 @@ bot = discord.Bot()
 
 @bot.event
 async def on_ready():
+    # 라이브러리/음성 모듈 버전 로깅으로 문제 추적 용이화
+    try:
+        import discord.voice_client as _vc
+        vc_mod = getattr(_vc, '__name__', 'discord.voice_client')
+    except Exception:
+        vc_mod = 'discord.voice_client (import failed)'
     logging.info(f'Logged in as {bot.user}')
+    logging.info(f'Pycord version={getattr(discord, "__version__", "unknown")} voice_module={vc_mod}')
 
 # Cogs 로딩: cogs 폴더에 있는 모든 .py 파일을 자동으로 로드합니다.
 for filename in os.listdir('./cogs'):
