@@ -1,5 +1,5 @@
 python-dotenv
-# Discord의 최신 음성 암호화 모드(aead_xchacha20_poly1305_*) 지원 버전으로 고정
-py-cord[voice]==2.6.3
+# PyPI의 최신 안정판 기준으로 고정 (2.6.1)
+py-cord[voice]==2.6.1
 PyNaCl
 yt-dlp
